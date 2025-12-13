@@ -20,5 +20,55 @@ impl Vec3 {
         Self { x, y, z}
     }
 
-    
+    pub fn add(&self, other: &Vec3) -> Self {
+        Self { x: self.x + other.x, y: self.y + other.y, z: self.z + other.z }
+    }
+
+    pub fn sub(&self, other: &Vec3) -> Self {
+        Self { x: self.x - other.x, y: self.y - other.y, z: self.z - other.z }
+    }
+
+    pub fn rotate_x(&self, angle: f32) -> Self {
+        Self { x: self.x, y: self.y * angle.cos() - self.z * angle.sin(), z: self.y * angle.sin() + self.z * angle.cos() }
+    }
+
+    pub fn rotate_y(&self, angle: f32) -> Self {
+        Self { x: self.x * angle.cos() + self.z * angle.sin(), y: self.y, z: -self.x * angle.sin() + self.z * angle.cos() }
+    }
+
+    pub fn rotate_z(&self, angle: f32) -> Self {
+        Self { x: self.x * angle.cos() - self.y * angle.sin(), y: self.x * angle.sin() + self.y * angle.cos(), z: self.z }
+    }
+}
+
+impl Add<Vec3> for Vec3 {
+    type Output = Vec3;
+
+    fn add(self, rhs: Vec3) -> Self::Output {
+        Self { x: self.x + rhs.x, y: self.y + rhs.y, z: self.z + rhs.z }
+    }
+}
+
+impl Sub<Vec3> for Vec3 {
+    type Output = Vec3;
+
+    fn sub(self, rhs: Vec3) -> Self::Output {
+        Self { x: self.x - rhs.x, y: self.y - rhs.y, z: self.z - rhs.z }
+    }
+}
+
+impl Mul<f32> for Vec3 {
+    type Output = Vec3;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self { x: self.x * rhs, y: self.y * rhs, z: self.z * rhs }
+    }
+}
+
+impl Div<f32> for Vec3 {
+    type Output = Vec3;
+
+    fn div(self, rhs: f32) -> Self::Output {
+        Self { x: self.x / rhs, y: self.y / rhs, z: self.z / rhs }
+    }
 }

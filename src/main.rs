@@ -2,7 +2,7 @@ use russsty::engine::{Engine, COLOR_BACKGROUND, COLOR_GRID, COLOR_MAGENTA};
 use russsty::window::{Window, WindowEvent, WINDOW_WIDTH, WINDOW_HEIGHT};
 use russsty::math::{vec2::Vec2, vec3::Vec3};
 
-const FOV_FACTOR: f32 = 640.0;
+const FOV_FACTOR: f32 = 640.0;  
 
 fn setup_cube_points(cube_points: &mut Vec<Vec3>) {
     let mut x = -1.0;
@@ -33,12 +33,14 @@ fn project(point: &Vec3) -> Option<Vec2> {
     ))
 }
 
-fn update(cube_points: & Vec<Vec3>, camera_position: &Vec3) -> Vec<Vec2> {
-
+fn update(cube_points: & Vec<Vec3>, camera_position: &Vec3, cube_rotation: &Vec3) -> Vec<Vec2> {
     cube_points
         .iter()
         .filter_map(|point: &Vec3|  {
             let mut point = point.clone();
+            point = point.rotate_x(cube_rotation.x);
+            point = point.rotate_y(cube_rotation.y);
+            point = point.rotate_z(cube_rotation.z);
             point.z -= camera_position.z;
             project(&point)
         })
@@ -59,6 +61,7 @@ fn main() -> Result<(), String> {
     let mut engine = Engine::new(WINDOW_WIDTH, WINDOW_HEIGHT);
     let mut cube_points: Vec<Vec3> = vec![];
     let camera_position = Vec3::new(0.0, 0.0, -5.0);
+    let mut cube_rotation = Vec3::new(0.0, 0.0, 0.0);
     setup_cube_points(&mut cube_points);
     
     loop {
@@ -71,7 +74,11 @@ fn main() -> Result<(), String> {
             WindowEvent::None => {}
         }
 
-        let projected_points = update(&cube_points, &camera_position);
+        cube_rotation.y += 0.01;
+        cube_rotation.z += 0.01;
+        cube_rotation.x += 0.01;
+
+        let projected_points = update(&cube_points, &camera_position, &cube_rotation);
         render(&mut engine, &window, &projected_points);
         window.present(engine.get_buffer_as_bytes())?;
     }
