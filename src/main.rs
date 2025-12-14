@@ -21,7 +21,7 @@ fn project(point: &Vec3) -> Option<Vec2> {
 
 
 
-fn update(camera_position: &Vec3, cube_rotation: &Vec3) -> Vec<Triangle> {
+fn update(camera_position: &Vec3, cube_rotation: &Vec3, window_width: u32, window_height: u32) -> Vec<Triangle> {
     let mut triangles_to_render = Vec::new();
 
     for face in MESH_FACES.iter() {
@@ -38,7 +38,10 @@ fn update(camera_position: &Vec3, cube_rotation: &Vec3) -> Vec<Triangle> {
             transformed_vertex = transformed_vertex.rotate_y(cube_rotation.y);
             transformed_vertex = transformed_vertex.rotate_z(cube_rotation.z);
             transformed_vertex.z -= camera_position.z;
-            if let Some(projected) = project(&transformed_vertex) {
+            if let Some(mut projected) = project(&transformed_vertex) {
+                // Adjust triangle points to be centered on screen
+                projected.x += window_width as f32 / 2.0;
+                projected.y += window_height as f32 / 2.0;
                 projected_points.push(projected);
             }
         }
@@ -55,7 +58,7 @@ fn update(camera_position: &Vec3, cube_rotation: &Vec3) -> Vec<Triangle> {
     triangles_to_render
 }
 
-fn render(engine: &mut Engine, window: &Window) {
+fn render(engine: &mut Engine) {
     engine.clear_color_buffer(COLOR_BACKGROUND);
     engine.draw_grid(50, COLOR_GRID);
 
@@ -63,13 +66,7 @@ fn render(engine: &mut Engine, window: &Window) {
     // Collect triangles first to avoid borrow checker issues
     let triangles: Vec<Triangle> = engine.get_triangles_to_render().to_vec();
     for triangle in triangles.iter() {
-        // Adjust triangle points to be centered on screen
-        let mut adjusted_triangle = triangle.clone();
-        for point in adjusted_triangle.points.iter_mut() {
-            point.x += window.width() as f32 / 2.0;
-            point.y += window.height() as f32 / 2.0;
-        }
-        engine.draw_triangle(&adjusted_triangle);
+        engine.draw_triangle(triangle);
     }
 }
 
@@ -99,9 +96,9 @@ fn main() -> Result<(), String> {
         cube_rotation.z += 0.01;
         cube_rotation.x += 0.01;
 
-        let triangles_to_render = update(&camera_position, &cube_rotation);
+        let triangles_to_render = update(&camera_position, &cube_rotation, window.width(), window.height());
         engine.set_triangles_to_render(triangles_to_render);
-        render(&mut engine, &window);
+        render(&mut engine);
         window.present(engine.get_buffer_as_bytes())?;
     }
 

@@ -4,6 +4,9 @@ use crate::triangle::Face;
 pub const N_NUM_VERTICES: usize = 8;
 pub const N_NUM_FACES: usize = 12;
 
+// OWNERSHIP: Static/constant data - owned by the program itself ('static lifetime)
+// This data is compiled into the binary and can be borrowed by anyone, anytime
+// No single owner - it's shared across the entire program lifetime
 pub const MESH_VERTICES: [Vec3; N_NUM_VERTICES] = [
     Vec3::new(-1.0, -1.0, -1.0),
     Vec3::new(-1.0, 1.0, -1.0),
@@ -15,6 +18,7 @@ pub const MESH_VERTICES: [Vec3; N_NUM_VERTICES] = [
     Vec3::new(-1.0, -1.0, 1.0),
 ];
 
+// OWNERSHIP: Same as MESH_VERTICES - static data, 'static lifetime
 pub const MESH_FACES: [Face; N_NUM_FACES] = [
     // Front face
     Face { a: 1, b: 2, c: 3},
