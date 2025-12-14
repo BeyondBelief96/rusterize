@@ -16,8 +16,9 @@ impl Vec3 {
     pub const DOWN: Self = Self { x: 0.0, y: -1.0, z: 0.0 };
     pub const FORWARD: Self = Self { x: 0.0, y: 0.0, z: 1.0};
     pub const BACK: Self = Self { x: 0.0, y: 0.0, z: -1.0};
-    pub fn new(x: f32, y: f32, z: f32) -> Vec3 {
-        Self { x, y, z}
+
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
     }
 
     pub fn add(&self, other: &Vec3) -> Self {
@@ -29,15 +30,21 @@ impl Vec3 {
     }
 
     pub fn rotate_x(&self, angle: f32) -> Self {
-        Self { x: self.x, y: self.y * angle.cos() - self.z * angle.sin(), z: self.y * angle.sin() + self.z * angle.cos() }
+        let sin = angle.sin();
+        let cos = angle.cos();
+        Self { x: self.x, y: self.y * cos - self.z * sin, z: self.y * sin + self.z * cos }
     }
 
     pub fn rotate_y(&self, angle: f32) -> Self {
-        Self { x: self.x * angle.cos() + self.z * angle.sin(), y: self.y, z: -self.x * angle.sin() + self.z * angle.cos() }
+        let sin = angle.sin();
+        let cos = angle.cos();
+        Self { x: self.x * cos + self.z * sin, y: self.y, z: -self.x * sin + self.z * cos }
     }
 
     pub fn rotate_z(&self, angle: f32) -> Self {
-        Self { x: self.x * angle.cos() - self.y * angle.sin(), y: self.x * angle.sin() + self.y * angle.cos(), z: self.z }
+        let sin = angle.sin();
+        let cos = angle.cos();
+        Self { x: self.x * cos - self.y * sin, y: self.x * sin + self.y * cos, z: self.z }
     }
 }
 

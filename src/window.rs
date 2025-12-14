@@ -5,6 +5,8 @@ use sdl2::rect::Rect;
 
 pub const WINDOW_WIDTH: u32 = 800;
 pub const WINDOW_HEIGHT: u32 = 600;
+pub const FPS: u64 = 60;
+pub const FRAME_TARGET_TIME: f64 = 1000.0 / FPS as f64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowEvent {
@@ -13,11 +15,41 @@ pub enum WindowEvent {
     Resize(u32, u32),
 }
 
+pub struct FrameLimiter {
+    previous_frame_time: u64,
+}
+
+impl FrameLimiter {
+    pub fn new(window: &Window) -> Self {
+        Self {
+            previous_frame_time: window.timer().ticks64(),
+        }
+    }
+
+    /// Waits if necessary to maintain frame rate and returns the delta time in milliseconds.
+    /// Delta time represents the time elapsed since the last call to this method.
+    pub fn wait_and_get_delta(&mut self, window: &Window) -> u64 {
+        let mut current_time = window.timer().ticks64();
+        let mut delta_time = current_time - self.previous_frame_time;
+        
+        if delta_time < FRAME_TARGET_TIME as u64 {
+            let time_to_wait = (FRAME_TARGET_TIME as u64) - delta_time;
+            std::thread::sleep(std::time::Duration::from_millis(time_to_wait as u64));
+            current_time = window.timer().ticks64();
+            delta_time = current_time - self.previous_frame_time;
+        }
+        
+        self.previous_frame_time = current_time;
+        delta_time
+    }
+}
+
 pub struct Window {
     canvas: sdl2::render::Canvas<sdl2::video::Window>,
     texture_creator: Box<sdl2::render::TextureCreator<sdl2::video::WindowContext>>,
     texture: sdl2::render::Texture<'static>,
     event_pump: sdl2::EventPump,
+    timer_subsystem: sdl2::TimerSubsystem,
     width: u32,
     height: u32,
 }
@@ -26,6 +58,7 @@ impl Window {
     pub fn new(title: &str, width: u32, height: u32) -> Result<Self, String> {
         let sdl_context = sdl2::init()?;
         let video_subsystem = sdl_context.video()?;
+        let timer_subsystem = sdl_context.timer()?;
 
         let window = video_subsystem
             .window(title, width, height)
@@ -51,6 +84,7 @@ impl Window {
             texture_creator,
             texture,
             event_pump,
+            timer_subsystem,
             width,
             height,
         })
@@ -104,5 +138,9 @@ impl Window {
 
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    pub fn timer(&self) -> &sdl2::TimerSubsystem {
+        &self.timer_subsystem
     }
 }

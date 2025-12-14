@@ -1,24 +1,10 @@
 use russsty::engine::{Engine, COLOR_BACKGROUND, COLOR_GRID, COLOR_MAGENTA};
-use russsty::window::{Window, WindowEvent, WINDOW_WIDTH, WINDOW_HEIGHT};
+use russsty::window::{WINDOW_HEIGHT, WINDOW_WIDTH, Window, WindowEvent, FrameLimiter};
 use russsty::math::{vec2::Vec2, vec3::Vec3};
+use russsty::mesh::{MESH_VERTICES, MESH_FACES};
+use russsty::triangle::Triangle;
 
 const FOV_FACTOR: f32 = 640.0;  
-
-fn setup_cube_points(cube_points: &mut Vec<Vec3>) {
-    let mut x = -1.0;
-    while x <= 1.0 {
-        let mut y = -1.0;
-        while y <= 1.0 {
-            let mut z = -1.0;
-            while z <= 1.0 {
-                cube_points.push(Vec3::new(x, y, z));
-                z += 0.25;
-            }
-            y += 0.25;
-        }
-        x += 0.25;
-    }
-}
 
 // Project a 3D point to a 2D point using perspective division
 fn project(point: &Vec3) -> Option<Vec2> {
@@ -33,38 +19,69 @@ fn project(point: &Vec3) -> Option<Vec2> {
     ))
 }
 
-fn update(cube_points: & Vec<Vec3>, camera_position: &Vec3, cube_rotation: &Vec3) -> Vec<Vec2> {
-    cube_points
-        .iter()
-        .filter_map(|point: &Vec3|  {
-            let mut point = point.clone();
-            point = point.rotate_x(cube_rotation.x);
-            point = point.rotate_y(cube_rotation.y);
-            point = point.rotate_z(cube_rotation.z);
-            point.z -= camera_position.z;
-            project(&point)
-        })
-        .collect()
+
+
+fn update(camera_position: &Vec3, cube_rotation: &Vec3) -> Vec<Triangle> {
+    let mut triangles_to_render = Vec::new();
+
+    for face in MESH_FACES.iter() {
+        let face_vertices = [
+            MESH_VERTICES[face.a as usize - 1],
+            MESH_VERTICES[face.b as usize - 1],
+            MESH_VERTICES[face.c as usize - 1],
+        ];
+
+        let mut projected_points = Vec::new();
+        for vertex in face_vertices.iter() {
+            let mut transformed_vertex = *vertex;
+            transformed_vertex = transformed_vertex.rotate_x(cube_rotation.x);
+            transformed_vertex = transformed_vertex.rotate_y(cube_rotation.y);
+            transformed_vertex = transformed_vertex.rotate_z(cube_rotation.z);
+            transformed_vertex.z -= camera_position.z;
+            if let Some(projected) = project(&transformed_vertex) {
+                projected_points.push(projected);
+            }
+        }
+
+        // Only create triangle if all three vertices were successfully projected
+        if projected_points.len() == 3 {
+            triangles_to_render.push(Triangle {
+                points: projected_points,
+                color: COLOR_MAGENTA,
+            });
+        }
+    }
+
+    triangles_to_render
 }
 
-fn render(engine: &mut Engine, window: &Window, projected_points: &Vec<Vec2>) {
+fn render(engine: &mut Engine, window: &Window) {
     engine.clear_color_buffer(COLOR_BACKGROUND);
     engine.draw_grid(50, COLOR_GRID);
 
-    for point in projected_points.iter() {
-        engine.draw_rect( window.width() as i32 / 2 + point.x as i32, window.height() as i32 / 2 + point.y as i32, 4, 4, COLOR_MAGENTA);
+    // Draw all triangles stored in the engine
+    // Collect triangles first to avoid borrow checker issues
+    let triangles: Vec<Triangle> = engine.get_triangles_to_render().to_vec();
+    for triangle in triangles.iter() {
+        // Adjust triangle points to be centered on screen
+        let mut adjusted_triangle = triangle.clone();
+        for point in adjusted_triangle.points.iter_mut() {
+            point.x += window.width() as f32 / 2.0;
+            point.y += window.height() as f32 / 2.0;
+        }
+        engine.draw_triangle(&adjusted_triangle);
     }
 }
 
 fn main() -> Result<(), String> {
     let mut window = Window::new("Russsty", WINDOW_WIDTH, WINDOW_HEIGHT)?;
-    let mut engine = Engine::new(WINDOW_WIDTH, WINDOW_HEIGHT);
-    let mut cube_points: Vec<Vec3> = vec![];
+    let mut engine = Engine::new(window.width(), window.height());
+
     let camera_position = Vec3::new(0.0, 0.0, -5.0);
     let mut cube_rotation = Vec3::new(0.0, 0.0, 0.0);
-    setup_cube_points(&mut cube_points);
     
-    loop {
+    let mut frame_limiter = FrameLimiter::new(&window);
+    loop  {
         match window.poll_events() {
             WindowEvent::Quit => break,
             WindowEvent::Resize(w, h) => {
@@ -74,12 +91,17 @@ fn main() -> Result<(), String> {
             WindowEvent::None => {}
         }
 
+        // Get delta time (in milliseconds) after frame limiting
+        let delta_time = frame_limiter.wait_and_get_delta(&window);
+
+        // Only run update/render after enough time has passed for this frame.
         cube_rotation.y += 0.01;
         cube_rotation.z += 0.01;
         cube_rotation.x += 0.01;
 
-        let projected_points = update(&cube_points, &camera_position, &cube_rotation);
-        render(&mut engine, &window, &projected_points);
+        let triangles_to_render = update(&camera_position, &cube_rotation);
+        engine.set_triangles_to_render(triangles_to_render);
+        render(&mut engine, &window);
         window.present(engine.get_buffer_as_bytes())?;
     }
 
