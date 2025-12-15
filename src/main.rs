@@ -1,10 +1,9 @@
 use russsty::engine::{Engine, COLOR_BACKGROUND, COLOR_GRID, COLOR_MAGENTA};
 use russsty::window::{WINDOW_HEIGHT, WINDOW_WIDTH, Window, WindowEvent, FrameLimiter};
 use russsty::math::{vec2::Vec2, vec3::Vec3};
-use russsty::mesh::{MESH_VERTICES, MESH_FACES};
 use russsty::triangle::Triangle;
 
-const FOV_FACTOR: f32 = 640.0;  
+const FOV_FACTOR: f32 = 640.0;
 
 // Project a 3D point to a 2D point using perspective division
 fn project(point: &Vec3) -> Option<Vec2> {
@@ -19,43 +18,45 @@ fn project(point: &Vec3) -> Option<Vec2> {
     ))
 }
 
+fn update(camera_position: &Vec3, engine: &mut Engine){
+    // Collect mesh data first to avoid borrow checker issues
+    let faces: Vec<_> = engine.mesh().faces().to_vec();
+    let vertices = engine.mesh().vertices().to_vec();
+    let rotation = *engine.mesh().rotation();
+    let buffer_width = engine.buffer_width();
+    let buffer_height = engine.buffer_height();
+    let triangles = engine.get_triangles_to_render_mut();
 
-
-fn update(camera_position: &Vec3, cube_rotation: &Vec3, window_width: u32, window_height: u32) -> Vec<Triangle> {
-    let mut triangles_to_render = Vec::new();
-
-    for face in MESH_FACES.iter() {
+    for face in faces.iter() {
         let face_vertices = [
-            MESH_VERTICES[face.a as usize - 1],
-            MESH_VERTICES[face.b as usize - 1],
-            MESH_VERTICES[face.c as usize - 1],
+            vertices[face.a as usize - 1],
+            vertices[face.b as usize - 1],
+            vertices[face.c as usize - 1],
         ];
 
         let mut projected_points = Vec::new();
         for vertex in face_vertices.iter() {
             let mut transformed_vertex = *vertex;
-            transformed_vertex = transformed_vertex.rotate_x(cube_rotation.x);
-            transformed_vertex = transformed_vertex.rotate_y(cube_rotation.y);
-            transformed_vertex = transformed_vertex.rotate_z(cube_rotation.z);
+            transformed_vertex = transformed_vertex.rotate_x(rotation.x);
+            transformed_vertex = transformed_vertex.rotate_y(rotation.y);
+            transformed_vertex = transformed_vertex.rotate_z(rotation.z);
             transformed_vertex.z -= camera_position.z;
             if let Some(mut projected) = project(&transformed_vertex) {
                 // Adjust triangle points to be centered on screen
-                projected.x += window_width as f32 / 2.0;
-                projected.y += window_height as f32 / 2.0;
+                projected.x += buffer_width as f32 / 2.0;
+                projected.y += buffer_height as f32 / 2.0;
                 projected_points.push(projected);
             }
         }
 
         // Only create triangle if all three vertices were successfully projected
         if projected_points.len() == 3 {
-            triangles_to_render.push(Triangle {
+            triangles.push(Triangle {
                 points: projected_points,
                 color: COLOR_MAGENTA,
             });
         }
     }
-
-    triangles_to_render
 }
 
 fn render(engine: &mut Engine) {
@@ -73,9 +74,9 @@ fn render(engine: &mut Engine) {
 fn main() -> Result<(), String> {
     let mut window = Window::new("Russsty", WINDOW_WIDTH, WINDOW_HEIGHT)?;
     let mut engine = Engine::new(window.width(), window.height());
+    engine.load_cube_mesh();
 
     let camera_position = Vec3::new(0.0, 0.0, -5.0);
-    let mut cube_rotation = Vec3::new(0.0, 0.0, 0.0);
     
     let mut frame_limiter = FrameLimiter::new(&window);
     loop  {
@@ -83,7 +84,7 @@ fn main() -> Result<(), String> {
             WindowEvent::Quit => break,
             WindowEvent::Resize(w, h) => {
                 window.resize(w, h)?;
-                engine = Engine::new(w, h);
+                engine.resize(w, h);
             }
             WindowEvent::None => {}
         }
@@ -92,12 +93,12 @@ fn main() -> Result<(), String> {
         let delta_time = frame_limiter.wait_and_get_delta(&window);
 
         // Only run update/render after enough time has passed for this frame.
-        cube_rotation.y += 0.01;
-        cube_rotation.z += 0.01;
-        cube_rotation.x += 0.01;
+        engine.mesh_mut().rotation_mut().y += 0.01;
+        engine.mesh_mut().rotation_mut().z += 0.01;
+        engine.mesh_mut().rotation_mut().x += 0.01;
 
-        let triangles_to_render = update(&camera_position, &cube_rotation, window.width(), window.height());
-        engine.set_triangles_to_render(triangles_to_render);
+        engine.clear_triangles_to_render();
+        update(&camera_position, &mut engine);
         render(&mut engine);
         window.present(engine.get_buffer_as_bytes())?;
     }

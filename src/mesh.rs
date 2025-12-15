@@ -1,13 +1,46 @@
 use crate::math::vec3::Vec3;
 use crate::triangle::Face;
 
-pub const N_NUM_VERTICES: usize = 8;
-pub const N_NUM_FACES: usize = 12;
+pub const N_CUBE_VERTICES: usize = 8;
+pub const N_CUBE_FACES: usize = 12;
 
-// OWNERSHIP: Static/constant data - owned by the program itself ('static lifetime)
-// This data is compiled into the binary and can be borrowed by anyone, anytime
-// No single owner - it's shared across the entire program lifetime
-pub const MESH_VERTICES: [Vec3; N_NUM_VERTICES] = [
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mesh {
+    /// The vertices of the mesh
+    pub vertices: Vec<Vec3>,
+    /// The faces of the mesh
+    pub faces: Vec<Face>,
+    /// The rotation about the x, y, and z axes for the mesh
+    pub rotation: Vec3,
+}
+
+impl Mesh {
+    pub fn new(vertices: Vec<Vec3>, faces: Vec<Face>, rotation: Vec3) -> Self {
+        Self { vertices, faces, rotation }
+    }
+
+    /// Get a reference to the rotation vector
+    pub fn rotation(&self) -> &Vec3 {
+        &self.rotation
+    }
+
+    /// Get a mutable reference to the rotation vector
+    pub fn rotation_mut(&mut self) -> &mut Vec3 {
+        &mut self.rotation
+    }
+
+    /// Get a reference to the vertices
+    pub fn vertices(&self) -> &[Vec3] {
+        &self.vertices
+    }
+
+    /// Get a reference to the faces
+    pub fn faces(&self) -> &[Face] {
+        &self.faces
+    }
+}
+
+pub const CUBE_VERTICES: [Vec3; N_CUBE_VERTICES] = [
     Vec3::new(-1.0, -1.0, -1.0),
     Vec3::new(-1.0, 1.0, -1.0),
     Vec3::new(1.0, 1.0, -1.0),
@@ -18,8 +51,7 @@ pub const MESH_VERTICES: [Vec3; N_NUM_VERTICES] = [
     Vec3::new(-1.0, -1.0, 1.0),
 ];
 
-// OWNERSHIP: Same as MESH_VERTICES - static data, 'static lifetime
-pub const MESH_FACES: [Face; N_NUM_FACES] = [
+pub const CUBE_FACES: [Face; N_CUBE_FACES] = [
     // Front face
     Face { a: 1, b: 2, c: 3},
     Face { a: 1, b: 3, c: 4},

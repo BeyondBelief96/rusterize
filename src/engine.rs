@@ -1,4 +1,6 @@
 use crate::triangle::Triangle;
+use crate::mesh::{Mesh, CUBE_VERTICES, CUBE_FACES};
+use crate::math::vec3::Vec3;
 
 pub const COLOR_BACKGROUND: u32 = 0xFF1E1E1E;
 pub const COLOR_GRID: u32 = 0xFF333333;
@@ -6,20 +8,35 @@ pub const COLOR_MAGENTA: u32 = 0xFFFF00FF;
 
 pub struct Engine {
     color_buffer: Vec<u32>,
-    width: u32,
-    height: u32,
+    buffer_width: u32,
+    buffer_height: u32,
     triangles_to_render: Vec<Triangle>,
+    mesh: Mesh
 }
 
 impl Engine {
-    pub fn new(width: u32, height: u32) -> Self {
-        let size = (width * height) as usize;
+    pub fn new(buffer_width: u32, buffer_height: u32) -> Self {
+        let size = (buffer_width * buffer_height) as usize;
         Self {
             color_buffer: vec![COLOR_BACKGROUND; size],
-            width,
-            height,
+            buffer_width,
+            buffer_height,
             triangles_to_render: Vec::new(),
+            mesh: Mesh::new(vec![], vec![], Vec3::ZERO),
         }
+    }
+
+    pub fn load_cube_mesh(&mut self) {
+        self.mesh = Mesh::new(CUBE_VERTICES.to_vec(), CUBE_FACES.to_vec(), Vec3::ZERO);
+    }
+
+    /// Resize the buffer, maintaining the invariant that buffer_width * buffer_height == color_buffer.len()
+    /// This is the only safe way to change buffer dimensions
+    pub fn resize(&mut self, buffer_width: u32, buffer_height: u32) {
+        let size = (buffer_width * buffer_height) as usize;
+        self.color_buffer = vec![COLOR_BACKGROUND; size];
+        self.buffer_width = buffer_width;
+        self.buffer_height = buffer_height;
     }
 
     pub fn clear_color_buffer(&mut self, color: u32) {
@@ -27,15 +44,23 @@ impl Engine {
     }
 
     pub fn set_pixel(&mut self, x: i32, y: i32, color: u32) {
-        if x >= 0 && x < self.width as i32 && y >= 0 && y < self.height as i32 {
-            let index = (y as u32 * self.width + x as u32) as usize;
+        if x >= 0 && x < self.buffer_width as i32 && y >= 0 && y < self.buffer_height as i32 {
+            let index = (y as u32 * self.buffer_width + x as u32) as usize;
             self.color_buffer[index] = color;
         }
     }
 
+    pub fn buffer_width(&self) -> u32 {
+        self.buffer_width
+    }
+
+    pub fn buffer_height(&self) -> u32 {
+        self.buffer_height
+    }
+
     pub fn draw_grid(&mut self, spacing: i32, color: u32) {
-        for y in 0..self.height as i32 {
-            for x in 0..self.width as i32 {
+        for y in 0..self.buffer_height as i32 {
+            for x in 0..self.buffer_width as i32 {
                 if x % spacing == 0 || y % spacing == 0 {
                     self.set_pixel(x, y, color);
                 }
@@ -59,6 +84,22 @@ impl Engine {
         &self.triangles_to_render
     }
 
+    pub fn get_triangles_to_render_mut(&mut self) -> &mut Vec<Triangle> {
+        &mut self.triangles_to_render
+    }
+
+    pub fn clear_triangles_to_render(&mut self) {
+        self.triangles_to_render.clear();
+    }
+
+    pub fn mesh(&self) -> &Mesh {
+        &self.mesh
+    }
+
+    pub fn mesh_mut(&mut self) -> &mut Mesh {
+        &mut self.mesh
+    }
+
     pub fn draw_triangle(&mut self, triangle: &Triangle) {
         // Draw triangle wireframe by drawing lines between the three points
         if triangle.points.len() != 3 {
@@ -70,11 +111,12 @@ impl Engine {
         let p2 = &triangle.points[2];
 
         // Draw lines between points (simple line drawing)
-        self.draw_line_dda(p0.x as i32, p0.y as i32, p1.x as i32, p1.y as i32, triangle.color);
-        self.draw_line_dda(p1.x as i32, p1.y as i32, p2.x as i32, p2.y as i32, triangle.color);
-        self.draw_line_dda(p2.x as i32, p2.y as i32, p0.x as i32, p0.y as i32, triangle.color);
+        self.draw_line_bresenham(p0.x as i32, p0.y as i32, p1.x as i32, p1.y as i32, triangle.color);
+        self.draw_line_bresenham(p1.x as i32, p1.y as i32, p2.x as i32, p2.y as i32, triangle.color);
+        self.draw_line_bresenham(p2.x as i32, p2.y as i32, p0.x as i32, p0.y as i32, triangle.color);
     } 
 
+    #[allow(dead_code)]
     fn draw_line_dda(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
         // Digital Differential Analyzer (DDA) line algorithm
 
@@ -146,8 +188,8 @@ impl Engine {
 
     #[cfg(test)]
     fn get_pixel(&self, x: i32, y: i32) -> Option<u32> {
-        if x >= 0 && x < self.width as i32 && y >= 0 && y < self.height as i32 {
-            let index = (y as u32 * self.width + x as u32) as usize;
+        if x >= 0 && x < self.buffer_width as i32 && y >= 0 && y < self.buffer_height as i32 {
+            let index = (y as u32 * self.buffer_width + x as u32) as usize;
             Some(self.color_buffer[index])
         } else {
             None
@@ -163,8 +205,8 @@ mod tests {
     #[test]
     fn test_new() {
         let engine = Engine::new(100, 200);
-        assert_eq!(engine.width, 100);
-        assert_eq!(engine.height, 200);
+        assert_eq!(engine.buffer_width(), 100);
+        assert_eq!(engine.buffer_height(), 200);
         assert_eq!(engine.triangles_to_render.len(), 0);
         // Check that buffer is initialized with background color
         assert_eq!(engine.get_pixel(0, 0), Some(COLOR_BACKGROUND));
