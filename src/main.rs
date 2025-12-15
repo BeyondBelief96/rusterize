@@ -19,8 +19,7 @@ fn project(point: &Vec3) -> Option<Vec2> {
 }
 
 fn update(camera_position: &Vec3, engine: &mut Engine){
-    // Collect mesh data first to avoid borrow checker issues
-    let faces: Vec<_> = engine.mesh().faces().to_vec();
+    let faces = engine.mesh().faces().to_vec();
     let vertices = engine.mesh().vertices().to_vec();
     let rotation = engine.mesh().rotation();
     let buffer_width = engine.buffer_width();
