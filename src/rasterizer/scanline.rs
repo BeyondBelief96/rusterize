@@ -101,15 +101,15 @@ impl Rasterizer for ScanlineRasterizer {
 
         self.sort_vertices(&mut v0, &mut v1, &mut v2);
 
-        // Check if triangle is flat-top (top two vertices have same y)
-        if (v0.y - v1.y).abs() < f32::EPSILON {
-            self.fill_flat_top_triangle(v0, v1, v2, buffer, color);
-            return;
-        }
-
         // Check if triangle is flat-bottom (bottom two vertices have same y)
         if (v1.y - v2.y).abs() < f32::EPSILON {
             self.fill_flat_bottom_triangle(v0, v1, v2, buffer, color);
+            return;
+        }
+
+        // Check if triangle is flat-top (top two vertices have same y)
+        if (v0.y - v1.y).abs() < f32::EPSILON {
+            self.fill_flat_top_triangle(v0, v1, v2, buffer, color);
             return;
         }
 
