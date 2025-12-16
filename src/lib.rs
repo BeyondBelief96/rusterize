@@ -8,6 +8,7 @@ pub(crate) mod framebuffer;
 pub(crate) mod mesh;
 pub(crate) mod rasterizer;
 pub(crate) mod renderer;
+pub(crate) mod sorting;
 
 // Re-export commonly needed types at crate root for convenience
 pub use engine::Engine;

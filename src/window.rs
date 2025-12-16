@@ -23,9 +23,9 @@ pub enum Key {
     Num3,
     Num4,
     Num5,
-    C, // Toggle backface culling
-    G, // Toggle grid
-    R, // Toggle rasterizer
+    C,
+    G,
+    R,
 }
 
 pub struct FrameLimiter {
@@ -44,14 +44,14 @@ impl FrameLimiter {
     pub fn wait_and_get_delta(&mut self, window: &Window) -> u64 {
         let mut current_time = window.timer().ticks64();
         let mut delta_time = current_time - self.previous_frame_time;
-        
+
         if delta_time < FRAME_TARGET_TIME as u64 {
             let time_to_wait = (FRAME_TARGET_TIME as u64) - delta_time;
             std::thread::sleep(std::time::Duration::from_millis(time_to_wait as u64));
             current_time = window.timer().ticks64();
             delta_time = current_time - self.previous_frame_time;
         }
-        
+
         self.previous_frame_time = current_time;
         delta_time
     }
@@ -115,7 +115,10 @@ impl Window {
                     win_event: sdl2::event::WindowEvent::Resized(w, h),
                     ..
                 } => return WindowEvent::Resize(w as u32, h as u32),
-                Event::KeyDown { keycode: Some(keycode), .. } => {
+                Event::KeyDown {
+                    keycode: Some(keycode),
+                    ..
+                } => {
                     let key = match keycode {
                         Keycode::Num1 => Some(Key::Num1),
                         Keycode::Num2 => Some(Key::Num2),
@@ -143,8 +146,11 @@ impl Window {
             .map_err(|e| e.to_string())?;
 
         self.canvas.clear();
-        self.canvas
-            .copy(&self.texture, None, Some(Rect::new(0, 0, self.width, self.height)))?;
+        self.canvas.copy(
+            &self.texture,
+            None,
+            Some(Rect::new(0, 0, self.width, self.height)),
+        )?;
         self.canvas.present();
         Ok(())
     }

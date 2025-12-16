@@ -1,6 +1,6 @@
 use super::{Rasterizer, Triangle};
 use crate::framebuffer::FrameBuffer;
-use crate::math::vec2::Vec2;
+use crate::math::{vec2::Vec2, vec3::Vec3};
 
 /// Scanline-based triangle rasterizer.
 ///
@@ -17,14 +17,14 @@ impl ScanlineRasterizer {
 
     /// Find the midpoint where the triangle is split into two smaller triangles.
     /// This assumes that the input points are sorted by Y coordinate already.
-    fn find_triangle_split_point(&self, p0: Vec2, p1: Vec2, p2: Vec2) -> Vec2 {
+    fn find_triangle_split_point(&self, p0: Vec3, p1: Vec3, p2: Vec3) -> Vec3 {
         let x_slope = (p2.x - p0.x) / (p2.y - p0.y);
         let my = p1.y;
         let mx = p0.x + x_slope * (my - p0.y);
-        Vec2::new(mx, my)
+        Vec3::new(mx, my, p0.z + x_slope * (my - p0.z))
     }
 
-    fn sort_vertices(&self, v0: &mut Vec2, v1: &mut Vec2, v2: &mut Vec2) {
+    fn sort_vertices(&self, v0: &mut Vec3, v1: &mut Vec3, v2: &mut Vec3) {
         if v1.y < v0.y {
             std::mem::swap(v0, v1);
         }
@@ -38,9 +38,9 @@ impl ScanlineRasterizer {
 
     fn fill_flat_bottom_triangle(
         &self,
-        v0: Vec2,
-        v1: Vec2,
-        v2: Vec2,
+        v0: Vec3,
+        v1: Vec3,
+        v2: Vec3,
         buffer: &mut FrameBuffer,
         color: u32,
     ) {
@@ -63,9 +63,9 @@ impl ScanlineRasterizer {
 
     fn fill_flat_top_triangle(
         &self,
-        v0: Vec2,
-        v1: Vec2,
-        v2: Vec2,
+        v0: Vec3,
+        v1: Vec3,
+        v2: Vec3,
         buffer: &mut FrameBuffer,
         color: u32,
     ) {

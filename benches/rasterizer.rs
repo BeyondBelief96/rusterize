@@ -1,6 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use russsty::bench::{EdgeFunctionRasterizer, FrameBuffer, Rasterizer, ScanlineRasterizer, Triangle};
-use russsty::math::vec2::Vec2;
+use russsty::bench::{
+    EdgeFunctionRasterizer, FrameBuffer, Rasterizer, ScanlineRasterizer, Triangle,
+};
+use russsty::math::vec3::Vec3;
 
 const BUFFER_WIDTH: u32 = 800;
 const BUFFER_HEIGHT: u32 = 600;
@@ -12,33 +14,36 @@ fn create_buffer() -> Vec<u32> {
 fn small_triangle() -> Triangle {
     Triangle::new(
         [
-            Vec2::new(100.0, 100.0),
-            Vec2::new(120.0, 100.0),
-            Vec2::new(110.0, 120.0),
+            Vec3::new(100.0, 100.0, 0.0),
+            Vec3::new(120.0, 100.0, 0.0),
+            Vec3::new(110.0, 120.0, 0.0),
         ],
         0xFFFF0000,
+        0.0,
     )
 }
 
 fn medium_triangle() -> Triangle {
     Triangle::new(
         [
-            Vec2::new(100.0, 100.0),
-            Vec2::new(300.0, 100.0),
-            Vec2::new(200.0, 300.0),
+            Vec3::new(100.0, 100.0, 0.0),
+            Vec3::new(300.0, 100.0, 0.0),
+            Vec3::new(200.0, 300.0, 0.0),
         ],
         0xFFFF0000,
+        0.0,
     )
 }
 
 fn large_triangle() -> Triangle {
     Triangle::new(
         [
-            Vec2::new(50.0, 50.0),
-            Vec2::new(750.0, 100.0),
-            Vec2::new(400.0, 550.0),
+            Vec3::new(50.0, 50.0, 0.0),
+            Vec3::new(750.0, 100.0, 0.0),
+            Vec3::new(400.0, 550.0, 0.0),
         ],
         0xFFFF0000,
+        0.0,
     )
 }
 
@@ -53,17 +58,13 @@ fn benchmark_single_triangle(c: &mut Criterion) {
         ("medium", medium_triangle()),
         ("large", large_triangle()),
     ] {
-        group.bench_with_input(
-            BenchmarkId::new("scanline", name),
-            &triangle,
-            |b, tri| {
-                let mut buffer = create_buffer();
-                b.iter(|| {
-                    let mut fb = FrameBuffer::new(&mut buffer, BUFFER_WIDTH, BUFFER_HEIGHT);
-                    scanline.fill_triangle(black_box(tri), &mut fb, tri.color);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("scanline", name), &triangle, |b, tri| {
+            let mut buffer = create_buffer();
+            b.iter(|| {
+                let mut fb = FrameBuffer::new(&mut buffer, BUFFER_WIDTH, BUFFER_HEIGHT);
+                scanline.fill_triangle(black_box(tri), &mut fb, tri.color);
+            });
+        });
 
         group.bench_with_input(
             BenchmarkId::new("edge_function", name),
@@ -95,11 +96,12 @@ fn benchmark_many_triangles(c: &mut Criterion) {
                 let y = row as f32 * 30.0;
                 Triangle::new(
                     [
-                        Vec2::new(x, y),
-                        Vec2::new(x + 35.0, y),
-                        Vec2::new(x + 17.5, y + 25.0),
+                        Vec3::new(x, y, 0.0),
+                        Vec3::new(x + 35.0, y, 0.0),
+                        Vec3::new(x + 17.5, y + 25.0, 0.0),
                     ],
                     0xFFFF0000,
+                    0.0,
                 )
             })
         })

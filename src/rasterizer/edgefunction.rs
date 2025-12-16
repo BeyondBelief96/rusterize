@@ -1,5 +1,5 @@
 use super::{Rasterizer, Triangle};
-use crate::math::vec2::Vec2;
+use crate::math::vec3::Vec3;
 
 /// Triangle rasterizer using the edge function algorithm.
 ///
@@ -19,7 +19,7 @@ impl EdgeFunctionRasterizer {
     /// negative if to the right (clockwise), and zero if exactly on the edge.
     /// This is the 2D cross product: (b - a) × (p - a)
     #[inline]
-    fn edge_function(a: Vec2, b: Vec2, p: Vec2) -> f32 {
+    fn edge_function(a: Vec3, b: Vec3, p: Vec3) -> f32 {
         (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)
     }
 }
@@ -59,7 +59,7 @@ impl Rasterizer for EdgeFunctionRasterizer {
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 // Sample at pixel center
-                let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
 
                 // Compute edge functions for all three edges
                 let w0 = Self::edge_function(v1, v2, p);

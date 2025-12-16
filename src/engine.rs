@@ -1,4 +1,3 @@
-use crate::math::vec2::Vec2;
 use crate::math::vec3::Vec3;
 use crate::mesh::{LoadError, Mesh, CUBE_FACES, CUBE_VERTICES};
 use crate::rasterizer::{Rasterizer, RasterizerDispatcher, Triangle};
@@ -113,15 +112,16 @@ impl Engine {
     }
 
     /// Project a 3D point to 2D screen coordinates
-    fn project(&self, point: Vec3) -> Option<Vec2> {
+    fn project(&self, point: Vec3) -> Option<Vec3> {
         // Clip points that are behind or too close to the camera
         if point.z < 0.1 {
             return None;
         }
 
-        Some(Vec2::new(
+        Some(Vec3::new(
             self.fov_factor * point.x / point.z,
             self.fov_factor * point.y / point.z,
+            point.z,
         ))
     }
 
@@ -187,9 +187,19 @@ impl Engine {
                 p2.x += half_width;
                 p2.y += half_height;
 
-                triangles.push(Triangle::new([p0, p1, p2], colors::FILL));
+                let avg_depth = (transformed_vertices[0].z
+                    + transformed_vertices[1].z
+                    + transformed_vertices[2].z)
+                    / 3.0;
+
+                triangles.push(Triangle::new([p0, p1, p2], colors::FILL, avg_depth));
             }
         }
+
+        // Sort triangles by depth using the painter's algorithm (descending order)
+        // Further away triangles are drawn first
+        self.triangles_to_render
+            .sort_by(|a, b| a.avg_depth.partial_cmp(&b.avg_depth).unwrap());
 
         self.triangles_to_render = triangles;
     }

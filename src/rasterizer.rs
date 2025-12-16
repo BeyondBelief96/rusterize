@@ -5,18 +5,23 @@ pub use edgefunction::EdgeFunctionRasterizer;
 pub use scanline::ScanlineRasterizer;
 
 use crate::framebuffer::FrameBuffer;
-use crate::math::vec2::Vec2;
+use crate::math::vec3::Vec3;
 
 /// A triangle ready for rasterization in screen space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Triangle {
-    pub points: [Vec2; 3],
+    pub points: [Vec3; 3],
     pub color: u32,
+    pub avg_depth: f32,
 }
 
 impl Triangle {
-    pub fn new(points: [Vec2; 3], color: u32) -> Self {
-        Self { points, color }
+    pub fn new(points: [Vec3; 3], color: u32, avg_depth: f32) -> Self {
+        Self {
+            points,
+            color,
+            avg_depth,
+        }
     }
 }
 
