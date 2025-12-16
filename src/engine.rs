@@ -134,6 +134,7 @@ impl Engine {
                 vertices[face.c as usize - 1],
             ];
 
+            // Model Space --> World Space
             let mut transformed_vertices = Vec::new();
             for vertex in face_vertices.iter() {
                 let mut transformed_vertex = *vertex;
@@ -144,14 +145,17 @@ impl Engine {
                 transformed_vertices.push(transformed_vertex);
             }
 
+            // No camera/view space transformation yet, however, we can consider ourselves in camera space at this point.
             // Apply backface culling
             if backface_culling {
-                let vec_ba = transformed_vertices[1] - transformed_vertices[0];
-                let vec_ca = transformed_vertices[2] - transformed_vertices[0];
+                let vec_ab = transformed_vertices[1] - transformed_vertices[0];
+                let vec_ac = transformed_vertices[2] - transformed_vertices[0];
 
                 // This normal is not normalized, but we only care about its direction.
-                let normal = vec_ba.cross(vec_ca);
-                let camera_ray = camera_position - transformed_vertices[0];
+                let normal = vec_ab.cross(vec_ac);
+
+                // In view space, camera is at origin. Vector from vertex to camera is just -vertex.
+                let camera_ray = -transformed_vertices[0];
                 if normal.dot(camera_ray) < 0.0 {
                     continue;
                 }

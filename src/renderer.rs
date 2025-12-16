@@ -3,10 +3,6 @@ use crate::rasterizer::Triangle;
 
 pub(crate) const COLOR_BACKGROUND: u32 = 0xFF1E1E1E;
 pub(crate) const COLOR_GRID: u32 = 0xFF333333;
-pub(crate) const COLOR_MAGENTA: u32 = 0xFFFF00FF;
-pub(crate) const COLOR_GREEN: u32 = 0xFF00FF00;
-pub(crate) const COLOR_WHITE: u32 = 0xFFFFFFFF;
-pub(crate) const COLOR_BLACK: u32 = 0xFF000000;
 
 pub(crate) struct Renderer {
     color_buffer: Vec<u32>,
