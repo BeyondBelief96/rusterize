@@ -108,6 +108,20 @@ impl Mat4 {
         ])
     }
 
+    /// Creates a perspective matrix with right-handed coordinate system.
+    pub fn perspective_rh(fov: f32, aspect_ratio: f32, near: f32, far: f32) -> Self {
+        let t = near * (fov / 2.0).tan();
+        let r = t * aspect_ratio;
+        let a = (far + near) / (far - near);
+        let b = -2.0 * far * near / (far - near);
+        Mat4::new([
+            [near / r, 0.0, 0.0, 0.0],
+            [0.0, near / t, 0.0, 0.0],
+            [0.0, 0.0, a, b],
+            [0.0, 0.0, 1.0, 0.0],
+        ])
+    }
+
     /// Returns a new matrix with scale applied: `self * Mat4::scaling(x, y, z)`.
     pub fn scale(&self, x: f32, y: f32, z: f32) -> Self {
         *self * Mat4::scaling(x, y, z)
