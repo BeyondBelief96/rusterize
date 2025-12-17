@@ -13,8 +13,6 @@ use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
 
 pub use crate::render::RasterizerType;
 
-const DEFAULT_FOV_FACTOR: f32 = 640.0;
-
 /// Rendering mode presets
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
