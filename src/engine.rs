@@ -8,6 +8,7 @@ use crate::colors;
 use crate::math::mat4::Mat4;
 use crate::math::vec3::Vec3;
 use crate::mesh::{LoadError, Mesh, CUBE_FACES, CUBE_VERTICES};
+use crate::prelude::Vec4;
 use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
 
 pub use crate::render::RasterizerType;
@@ -36,7 +37,7 @@ pub struct Engine {
     triangles_to_render: Vec<Triangle>,
     mesh: Mesh,
     camera_position: Vec3,
-    fov_factor: f32,
+    projection_matrix: Mat4,
     render_mode: RenderMode,
     pub backface_culling: bool,
     pub draw_grid: bool,
@@ -44,13 +45,17 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(width: u32, height: u32) -> Self {
+        let fov: f32 = 45.0;
+        let aspect_ratio = width as f32 / height as f32;
+        let projection_matrix = Mat4::perspective_lh(fov.to_radians(), aspect_ratio, 0.1, 100.0);
+
         Self {
             renderer: Renderer::new(width, height),
             rasterizer: RasterizerDispatcher::new(RasterizerType::default()),
             triangles_to_render: Vec::new(),
-            mesh: Mesh::new(vec![], vec![], Vec3::ZERO, Vec3::ONE),
+            mesh: Mesh::new(vec![], vec![], Vec3::ZERO, Vec3::ONE, Vec3::ZERO),
             camera_position: Vec3::new(0.0, 0.0, -5.0),
-            fov_factor: DEFAULT_FOV_FACTOR,
+            projection_matrix,
             render_mode: RenderMode::default(),
             backface_culling: true,
             draw_grid: true,
@@ -79,6 +84,7 @@ impl Engine {
             CUBE_FACES.to_vec(),
             Vec3::ZERO,
             Vec3::ONE,
+            Vec3::ZERO,
         );
     }
 
@@ -89,6 +95,8 @@ impl Engine {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
+        self.projection_matrix =
+            Mat4::perspective_lh(45.0, width as f32 / height as f32, 0.1, 100.0);
     }
 
     pub fn set_camera_position(&mut self, position: Vec3) {
@@ -97,10 +105,6 @@ impl Engine {
 
     pub fn camera_position(&self) -> Vec3 {
         self.camera_position
-    }
-
-    pub fn set_fov_factor(&mut self, fov: f32) {
-        self.fov_factor = fov;
     }
 
     pub fn mesh_mut(&mut self) -> &mut Mesh {
@@ -116,25 +120,12 @@ impl Engine {
         self.renderer.as_bytes()
     }
 
-    /// Project a 3D point to 2D screen coordinates
-    fn project(&self, point: Vec3) -> Option<Vec3> {
-        // Clip points that are behind or too close to the camera
-        if point.z < 0.1 {
-            return None;
-        }
-
-        Some(Vec3::new(
-            self.fov_factor * point.x / point.z,
-            self.fov_factor * point.y / point.z,
-            point.z,
-        ))
-    }
-
     /// Update the engine state - transforms vertices and builds triangles to render
     pub fn update(&mut self) {
         let faces = self.mesh.faces().to_vec();
         let vertices = self.mesh.vertices().to_vec();
         let rotation = self.mesh.rotation();
+        let translation = self.mesh.translation();
         let scale = self.mesh().scale();
         let buffer_width = self.renderer.width();
         let buffer_height = self.renderer.height();
@@ -142,7 +133,13 @@ impl Engine {
         let backface_culling = self.backface_culling;
 
         let mut triangles = Vec::new();
-        let scale_matrix = Mat4::scaling(scale.x, scale.y, scale.z);
+        let world_matrix = Mat4::translation(translation.x, translation.y, translation.z)
+            * Mat4::rotation_x(rotation.x)
+            * Mat4::rotation_y(rotation.y)
+            * Mat4::rotation_z(rotation.z)
+            * Mat4::scaling(scale.x, scale.y, scale.z);
+
+        self.mesh_mut().translation().z = camera_position.z;
         for face in faces.iter() {
             let face_vertices = [
                 vertices[face.a as usize - 1],
@@ -153,11 +150,7 @@ impl Engine {
             // Model Space --> World Space
             let mut transformed_vertices = Vec::new();
             for vertex in face_vertices.iter() {
-                let mut transformed_vertex = scale_matrix * *vertex;
-                transformed_vertex = transformed_vertex.rotate_x(rotation.x);
-                transformed_vertex = transformed_vertex.rotate_y(rotation.y);
-                transformed_vertex = transformed_vertex.rotate_z(rotation.z);
-                transformed_vertex.z -= camera_position.z;
+                let transformed_vertex = world_matrix * *vertex;
 
                 transformed_vertices.push(transformed_vertex);
             }
@@ -178,28 +171,42 @@ impl Engine {
                 }
             }
 
-            // Project all three vertices; skip triangle if any fail
-            let p0 = self.project(transformed_vertices[0]);
-            let p1 = self.project(transformed_vertices[1]);
-            let p2 = self.project(transformed_vertices[2]);
+            let mut projected_vertices = Vec::new();
+            for vertex in &transformed_vertices {
+                let clip_space_vertex =
+                    self.projection_matrix * Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
 
-            if let (Some(mut p0), Some(mut p1), Some(mut p2)) = (p0, p1, p2) {
-                // Center on screen
-                let half_width = buffer_width as f32 / 2.0;
-                let half_height = buffer_height as f32 / 2.0;
-                p0.x += half_width;
-                p0.y += half_height;
-                p1.x += half_width;
-                p1.y += half_height;
-                p2.x += half_width;
-                p2.y += half_height;
+                // w <= 0 means vertex is behind or on the near plane.
+                if clip_space_vertex.w <= 0.0 {
+                    continue;
+                }
 
+                let ndc_vertex = Vec3::new(
+                    clip_space_vertex.x / clip_space_vertex.w,
+                    clip_space_vertex.y / clip_space_vertex.w,
+                    clip_space_vertex.z / clip_space_vertex.w,
+                );
+
+                let screen_x = (ndc_vertex.x + 1.0) * 0.5 * buffer_width as f32;
+                let screen_y = (1.0 - ndc_vertex.y) * 0.5 * buffer_height as f32;
+                projected_vertices.push(Vec3::new(screen_x, screen_y, clip_space_vertex.w));
+            }
+
+            if projected_vertices.len() == 3 {
                 let avg_depth = (transformed_vertices[0].z
                     + transformed_vertices[1].z
                     + transformed_vertices[2].z)
                     / 3.0;
 
-                triangles.push(Triangle::new([p0, p1, p2], colors::FILL, avg_depth));
+                triangles.push(Triangle::new(
+                    [
+                        projected_vertices[0],
+                        projected_vertices[1],
+                        projected_vertices[2],
+                    ],
+                    colors::FILL,
+                    avg_depth,
+                ));
             }
         }
 

@@ -65,15 +65,23 @@ pub struct Mesh {
     faces: Vec<Face>,
     rotation: Vec3,
     scale: Vec3,
+    translation: Vec3,
 }
 
 impl Mesh {
-    pub(crate) fn new(vertices: Vec<Vec3>, faces: Vec<Face>, rotation: Vec3, scale: Vec3) -> Self {
+    pub(crate) fn new(
+        vertices: Vec<Vec3>,
+        faces: Vec<Face>,
+        rotation: Vec3,
+        scale: Vec3,
+        translation: Vec3,
+    ) -> Self {
         Self {
             vertices,
             faces,
             rotation,
             scale,
+            translation,
         }
     }
 
@@ -108,7 +116,13 @@ impl Mesh {
             .map(|c| Face::new(c[0] + 1, c[1] + 1, c[2] + 1))
             .collect();
 
-        Ok(Self::new(vertices, faces, Vec3::ZERO, Vec3::ONE))
+        Ok(Self::new(
+            vertices,
+            faces,
+            Vec3::ZERO,
+            Vec3::ONE,
+            Vec3::ZERO,
+        ))
     }
 
     /// Get the rotation vector
@@ -129,6 +143,16 @@ impl Mesh {
     /// Get a mutable reference to the scale vector
     pub fn scale_mut(&mut self) -> &mut Vec3 {
         &mut self.scale
+    }
+
+    /// Get the translation vector
+    pub fn translation(&self) -> Vec3 {
+        self.translation
+    }
+
+    /// Get a mutable reference to the translation vector
+    pub fn translation_mut(&mut self) -> &mut Vec3 {
+        &mut self.translation
     }
 
     /// Get a reference to the vertices

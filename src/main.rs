@@ -18,7 +18,7 @@ fn main() -> Result<(), String> {
     let mut engine = Engine::new(window.width(), window.height());
 
     engine
-        .load_mesh("assets/f22.obj")
+        .load_mesh("assets/cube.obj")
         .map_err(|e| e.to_string())?;
 
     let mut frame_limiter = FrameLimiter::new(&window);
@@ -52,15 +52,12 @@ fn main() -> Result<(), String> {
 
         let _delta_time = frame_limiter.wait_and_get_delta(&window);
 
-        // Rotate and scalethe mesh
         let mesh = engine.mesh_mut();
+        mesh.translation_mut().z = 5.0;
+
         mesh.rotation_mut().x += 0.01;
         mesh.rotation_mut().y += 0.01;
         mesh.rotation_mut().z += 0.01;
-
-        mesh.scale_mut().x += 0.01;
-        mesh.scale_mut().y += 0.01;
-        mesh.scale_mut().z += 0.01;
 
         engine.update();
         engine.render();

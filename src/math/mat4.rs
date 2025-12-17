@@ -64,8 +64,8 @@ impl Mat4 {
         let s = angle.sin();
         Mat4::new([
             [1.0, 0.0, 0.0, 0.0],
-            [0.0, c, -s, 0.0],
-            [0.0, s, c, 0.0],
+            [0.0, c, s, 0.0],
+            [0.0, -s, c, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ])
     }
@@ -75,9 +75,9 @@ impl Mat4 {
         let c = angle.cos();
         let s = angle.sin();
         Mat4::new([
-            [c, 0.0, s, 0.0],
+            [c, 0.0, -s, 0.0],
             [0.0, 1.0, 0.0, 0.0],
-            [-s, 0.0, c, 0.0],
+            [s, 0.0, c, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ])
     }
@@ -87,10 +87,24 @@ impl Mat4 {
         let c = angle.cos();
         let s = angle.sin();
         Mat4::new([
-            [c, -s, 0.0, 0.0],
-            [s, c, 0.0, 0.0],
+            [c, s, 0.0, 0.0],
+            [-s, c, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// Creates a perspective matrix with left-handed coordinate system.
+    pub fn perspective_lh(fov: f32, aspect_ratio: f32, near: f32, far: f32) -> Self {
+        let t = near * (fov / 2.0).tan();
+        let r = t * aspect_ratio;
+        let a = (far + near) / (near - far);
+        let b = -2.0 * far * near / (far - near);
+        Mat4::new([
+            [near / r, 0.0, 0.0, 0.0],
+            [0.0, near / t, 0.0, 0.0],
+            [0.0, 0.0, a, b],
+            [0.0, 0.0, 1.0, 0.0],
         ])
     }
 
@@ -187,22 +201,14 @@ impl Mul<Vec3> for Mat4 {
     type Output = Vec3;
 
     fn mul(self, v: Vec3) -> Self::Output {
-        let x = self.data[0][0] * v.x
-            + self.data[0][1] * v.y
-            + self.data[0][2] * v.z
-            + self.data[0][3];
-        let y = self.data[1][0] * v.x
-            + self.data[1][1] * v.y
-            + self.data[1][2] * v.z
-            + self.data[1][3];
-        let z = self.data[2][0] * v.x
-            + self.data[2][1] * v.y
-            + self.data[2][2] * v.z
-            + self.data[2][3];
-        let w = self.data[3][0] * v.x
-            + self.data[3][1] * v.y
-            + self.data[3][2] * v.z
-            + self.data[3][3];
+        let x =
+            self.data[0][0] * v.x + self.data[0][1] * v.y + self.data[0][2] * v.z + self.data[0][3];
+        let y =
+            self.data[1][0] * v.x + self.data[1][1] * v.y + self.data[1][2] * v.z + self.data[1][3];
+        let z =
+            self.data[2][0] * v.x + self.data[2][1] * v.y + self.data[2][2] * v.z + self.data[2][3];
+        let w =
+            self.data[3][0] * v.x + self.data[3][1] * v.y + self.data[3][2] * v.z + self.data[3][3];
 
         if w != 0.0 && w != 1.0 {
             Vec3::new(x / w, y / w, z / w)
