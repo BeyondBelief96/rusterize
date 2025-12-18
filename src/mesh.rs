@@ -1,17 +1,14 @@
 //! 3D mesh representation and loading.
 //!
-//! Provides the [`Mesh`] struct for storing vertices and faces, along with
+//! Provides the [`Mesh`] struct for storing vertices, normals, and faces, along with
 //! OBJ file loading support via the `tobj` crate.
 
 use std::fmt;
 
 use crate::math::vec3::Vec3;
 
-pub(crate) const N_CUBE_VERTICES: usize = 8;
-pub(crate) const N_CUBE_FACES: usize = 12;
-
-/// Represents a triangle face defined by three vertex indices.
-/// The indices are 1-based into the mesh's vertex array.
+/// Represents a triangle face with indices into the vertex array.
+/// Uses 0-based indexing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Face {
     pub a: u32,
@@ -59,9 +56,16 @@ impl From<tobj::LoadError> for LoadError {
     }
 }
 
+/// A vertex with position and normal attributes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Vertex {
+    pub position: Vec3,
+    pub normal: Vec3,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
-    vertices: Vec<Vec3>,
+    vertices: Vec<Vertex>,
     faces: Vec<Face>,
     rotation: Vec3,
     scale: Vec3,
@@ -70,7 +74,7 @@ pub struct Mesh {
 
 impl Mesh {
     pub(crate) fn new(
-        vertices: Vec<Vec3>,
+        vertices: Vec<Vertex>,
         faces: Vec<Face>,
         rotation: Vec3,
         scale: Vec3,
@@ -86,12 +90,15 @@ impl Mesh {
     }
 
     pub(crate) fn from_obj(file_path: &str) -> Result<Self, LoadError> {
-        let (models, _materials) = tobj::load_obj(file_path, &tobj::GPU_LOAD_OPTIONS)?;
+        let load_options = tobj::LoadOptions {
+            triangulate: true,
+            single_index: true,
+            ..Default::default()
+        };
 
-        // For now we only support a single model
+        let (models, _materials) = tobj::load_obj(file_path, &load_options)?;
+
         let model = models.into_iter().next().ok_or(LoadError::NoModels)?;
-
-        // For now we assume a single mesh per model.
         let mesh = model.mesh;
 
         if mesh.positions.is_empty() {
@@ -102,18 +109,30 @@ impl Mesh {
             return Err(LoadError::InvalidFaces);
         }
 
-        // Convert flat [x, y, z, x, y, z, ...] to Vec3
-        let vertices: Vec<Vec3> = mesh
+        // With single_index: true, positions and normals are aligned
+        let has_normals = !mesh.normals.is_empty();
+        let vertices: Vec<Vertex> = mesh
             .positions
             .chunks_exact(3)
-            .map(|c| Vec3::new(c[0], c[1], c[2]))
+            .enumerate()
+            .map(|(i, p)| {
+                let normal = if has_normals {
+                    let n = &mesh.normals[i * 3..i * 3 + 3];
+                    Vec3::new(n[0], n[1], n[2])
+                } else {
+                    Vec3::ZERO
+                };
+                Vertex {
+                    position: Vec3::new(p[0], p[1], p[2]),
+                    normal,
+                }
+            })
             .collect();
 
-        // Convert flat indices to Face (tobj is 0-based, add 1 for 1-based convention)
         let faces: Vec<Face> = mesh
             .indices
             .chunks_exact(3)
-            .map(|c| Face::new(c[0] + 1, c[1] + 1, c[2] + 1))
+            .map(|c| Face::new(c[0], c[1], c[2]))
             .collect();
 
         Ok(Self::new(
@@ -156,7 +175,7 @@ impl Mesh {
     }
 
     /// Get a reference to the vertices
-    pub(crate) fn vertices(&self) -> &[Vec3] {
+    pub(crate) fn vertices(&self) -> &[Vertex] {
         &self.vertices
     }
 
@@ -164,36 +183,15 @@ impl Mesh {
     pub(crate) fn faces(&self) -> &[Face] {
         &self.faces
     }
+
+    /// Get a vertex for a specific face and vertex position (0, 1, or 2)
+    pub(crate) fn get_face_vertex(&self, face_idx: usize, vertex_pos: usize) -> &Vertex {
+        let idx = match vertex_pos {
+            0 => self.faces[face_idx].a,
+            1 => self.faces[face_idx].b,
+            2 => self.faces[face_idx].c,
+            _ => panic!("vertex_pos must be 0, 1, or 2"),
+        };
+        &self.vertices[idx as usize]
+    }
 }
-
-pub(crate) const CUBE_VERTICES: [Vec3; N_CUBE_VERTICES] = [
-    Vec3::new(-1.0, -1.0, -1.0),
-    Vec3::new(-1.0, 1.0, -1.0),
-    Vec3::new(1.0, 1.0, -1.0),
-    Vec3::new(1.0, -1.0, -1.0),
-    Vec3::new(1.0, 1.0, 1.0),
-    Vec3::new(1.0, -1.0, 1.0),
-    Vec3::new(-1.0, 1.0, 1.0),
-    Vec3::new(-1.0, -1.0, 1.0),
-];
-
-pub(crate) const CUBE_FACES: [Face; N_CUBE_FACES] = [
-    // Front face
-    Face { a: 1, b: 2, c: 3 },
-    Face { a: 1, b: 3, c: 4 },
-    // Right face
-    Face { a: 4, b: 3, c: 5 },
-    Face { a: 4, b: 5, c: 6 },
-    // Back face
-    Face { a: 6, b: 5, c: 7 },
-    Face { a: 6, b: 7, c: 8 },
-    // Left face
-    Face { a: 8, b: 7, c: 2 },
-    Face { a: 8, b: 2, c: 1 },
-    // Top face
-    Face { a: 2, b: 7, c: 5 },
-    Face { a: 2, b: 5, c: 3 },
-    // Bottom face
-    Face { a: 6, b: 8, c: 1 },
-    Face { a: 6, b: 1, c: 4 },
-];

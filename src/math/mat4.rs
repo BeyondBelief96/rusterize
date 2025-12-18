@@ -122,29 +122,130 @@ impl Mat4 {
         ])
     }
 
-    /// Returns a new matrix with scale applied: `self * Mat4::scaling(x, y, z)`.
-    pub fn scale(&self, x: f32, y: f32, z: f32) -> Self {
-        *self * Mat4::scaling(x, y, z)
-    }
-
     /// Returns a new matrix with translation applied: `self * Mat4::translation(x, y, z)`.
     pub fn translate(&self, x: f32, y: f32, z: f32) -> Self {
         *self * Mat4::translation(x, y, z)
     }
 
-    /// Returns a new matrix with X rotation applied: `self * Mat4::rotation_x(angle)`.
-    pub fn rotate_x(&self, angle: f32) -> Self {
-        *self * Mat4::rotation_x(angle)
+    /// Returns a new matrix with transpose applied: `self.transpose()`.
+    pub fn transpose(&self) -> Self {
+        Mat4 {
+            data: [
+                [
+                    self.data[0][0],
+                    self.data[1][0],
+                    self.data[2][0],
+                    self.data[3][0],
+                ],
+                [
+                    self.data[0][1],
+                    self.data[1][1],
+                    self.data[2][1],
+                    self.data[3][1],
+                ],
+                [
+                    self.data[0][2],
+                    self.data[1][2],
+                    self.data[2][2],
+                    self.data[3][2],
+                ],
+                [
+                    self.data[0][3],
+                    self.data[1][3],
+                    self.data[2][3],
+                    self.data[3][3],
+                ],
+            ],
+        }
     }
 
-    /// Returns a new matrix with Y rotation applied: `self * Mat4::rotation_y(angle)`.
-    pub fn rotate_y(&self, angle: f32) -> Self {
-        *self * Mat4::rotation_y(angle)
-    }
+    /// Computes the inverse of the matrix, if it exists.
+    /// Returns `None` if the matrix is singular (determinant is zero).
+    pub fn inverse(&self) -> Option<Mat4> {
+        let m = &self.data;
 
-    /// Returns a new matrix with Z rotation applied: `self * Mat4::rotation_z(angle)`.
-    pub fn rotate_z(&self, angle: f32) -> Self {
-        *self * Mat4::rotation_z(angle)
+        // Calculate cofactors for the first row (needed for determinant)
+        let c00 = m[1][1] * (m[2][2] * m[3][3] - m[2][3] * m[3][2])
+            - m[1][2] * (m[2][1] * m[3][3] - m[2][3] * m[3][1])
+            + m[1][3] * (m[2][1] * m[3][2] - m[2][2] * m[3][1]);
+
+        let c01 = -(m[1][0] * (m[2][2] * m[3][3] - m[2][3] * m[3][2])
+            - m[1][2] * (m[2][0] * m[3][3] - m[2][3] * m[3][0])
+            + m[1][3] * (m[2][0] * m[3][2] - m[2][2] * m[3][0]));
+
+        let c02 = m[1][0] * (m[2][1] * m[3][3] - m[2][3] * m[3][1])
+            - m[1][1] * (m[2][0] * m[3][3] - m[2][3] * m[3][0])
+            + m[1][3] * (m[2][0] * m[3][1] - m[2][1] * m[3][0]);
+
+        let c03 = -(m[1][0] * (m[2][1] * m[3][2] - m[2][2] * m[3][1])
+            - m[1][1] * (m[2][0] * m[3][2] - m[2][2] * m[3][0])
+            + m[1][2] * (m[2][0] * m[3][1] - m[2][1] * m[3][0]));
+
+        // Determinant using first row expansion
+        let det = m[0][0] * c00 + m[0][1] * c01 + m[0][2] * c02 + m[0][3] * c03;
+
+        if det.abs() < f32::EPSILON {
+            return None;
+        }
+
+        let inv_det = 1.0 / det;
+
+        // Calculate remaining cofactors
+        let c10 = -(m[0][1] * (m[2][2] * m[3][3] - m[2][3] * m[3][2])
+            - m[0][2] * (m[2][1] * m[3][3] - m[2][3] * m[3][1])
+            + m[0][3] * (m[2][1] * m[3][2] - m[2][2] * m[3][1]));
+
+        let c11 = m[0][0] * (m[2][2] * m[3][3] - m[2][3] * m[3][2])
+            - m[0][2] * (m[2][0] * m[3][3] - m[2][3] * m[3][0])
+            + m[0][3] * (m[2][0] * m[3][2] - m[2][2] * m[3][0]);
+
+        let c12 = -(m[0][0] * (m[2][1] * m[3][3] - m[2][3] * m[3][1])
+            - m[0][1] * (m[2][0] * m[3][3] - m[2][3] * m[3][0])
+            + m[0][3] * (m[2][0] * m[3][1] - m[2][1] * m[3][0]));
+
+        let c13 = m[0][0] * (m[2][1] * m[3][2] - m[2][2] * m[3][1])
+            - m[0][1] * (m[2][0] * m[3][2] - m[2][2] * m[3][0])
+            + m[0][2] * (m[2][0] * m[3][1] - m[2][1] * m[3][0]);
+
+        let c20 = m[0][1] * (m[1][2] * m[3][3] - m[1][3] * m[3][2])
+            - m[0][2] * (m[1][1] * m[3][3] - m[1][3] * m[3][1])
+            + m[0][3] * (m[1][1] * m[3][2] - m[1][2] * m[3][1]);
+
+        let c21 = -(m[0][0] * (m[1][2] * m[3][3] - m[1][3] * m[3][2])
+            - m[0][2] * (m[1][0] * m[3][3] - m[1][3] * m[3][0])
+            + m[0][3] * (m[1][0] * m[3][2] - m[1][2] * m[3][0]));
+
+        let c22 = m[0][0] * (m[1][1] * m[3][3] - m[1][3] * m[3][1])
+            - m[0][1] * (m[1][0] * m[3][3] - m[1][3] * m[3][0])
+            + m[0][3] * (m[1][0] * m[3][1] - m[1][1] * m[3][0]);
+
+        let c23 = -(m[0][0] * (m[1][1] * m[3][2] - m[1][2] * m[3][1])
+            - m[0][1] * (m[1][0] * m[3][2] - m[1][2] * m[3][0])
+            + m[0][2] * (m[1][0] * m[3][1] - m[1][1] * m[3][0]));
+
+        let c30 = -(m[0][1] * (m[1][2] * m[2][3] - m[1][3] * m[2][2])
+            - m[0][2] * (m[1][1] * m[2][3] - m[1][3] * m[2][1])
+            + m[0][3] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]));
+
+        let c31 = m[0][0] * (m[1][2] * m[2][3] - m[1][3] * m[2][2])
+            - m[0][2] * (m[1][0] * m[2][3] - m[1][3] * m[2][0])
+            + m[0][3] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]);
+
+        let c32 = -(m[0][0] * (m[1][1] * m[2][3] - m[1][3] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][3] - m[1][3] * m[2][0])
+            + m[0][3] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]));
+
+        let c33 = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+
+        // The inverse is the transpose of the cofactor matrix divided by determinant
+        Some(Mat4::new([
+            [c00 * inv_det, c10 * inv_det, c20 * inv_det, c30 * inv_det],
+            [c01 * inv_det, c11 * inv_det, c21 * inv_det, c31 * inv_det],
+            [c02 * inv_det, c12 * inv_det, c22 * inv_det, c32 * inv_det],
+            [c03 * inv_det, c13 * inv_det, c23 * inv_det, c33 * inv_det],
+        ]))
     }
 
     /// Access element at [row][col].

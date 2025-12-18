@@ -2,6 +2,7 @@ use russsty::engine::{Engine, RasterizerType, RenderMode};
 use russsty::window::{
     FpsCounter, FrameLimiter, Key, Window, WindowEvent, WINDOW_HEIGHT, WINDOW_WIDTH,
 };
+use russsty::ShadingMode;
 
 fn format_window_title(fps: f64, engine: &Engine) -> String {
     format!(
@@ -18,7 +19,7 @@ fn main() -> Result<(), String> {
     let mut engine = Engine::new(window.width(), window.height());
 
     engine
-        .load_mesh("assets/bunny.obj")
+        .load_mesh("assets/f22.obj")
         .map_err(|e| e.to_string())?;
 
     let mut frame_limiter = FrameLimiter::new(&window);
@@ -45,6 +46,14 @@ fn main() -> Result<(), String> {
                         RasterizerType::EdgeFunction => RasterizerType::Scanline,
                     };
                     engine.set_rasterizer(next);
+                }
+                Key::F => {
+                    let next = match engine.shading_mode() {
+                        ShadingMode::None => ShadingMode::None,
+                        ShadingMode::Flat => ShadingMode::Gouraud,
+                        ShadingMode::Gouraud => ShadingMode::Flat,
+                    };
+                    engine.set_shading_mode(next);
                 }
             },
             WindowEvent::None => {}

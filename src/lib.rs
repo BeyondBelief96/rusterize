@@ -26,7 +26,7 @@ pub(crate) mod render;
 pub(crate) mod sorting;
 
 // Re-export commonly needed types at crate root for convenience
-pub use engine::{Engine, RasterizerType, RenderMode};
+pub use engine::{Engine, RasterizerType, RenderMode, ShadingMode};
 pub use mesh::{LoadError, Mesh};
 
 /// Prelude module for convenient imports.
@@ -36,7 +36,7 @@ pub use mesh::{LoadError, Mesh};
 /// use russsty::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::engine::{Engine, RenderMode};
+    pub use crate::engine::{Engine, RenderMode, ShadingMode};
     pub use crate::math::mat4::Mat4;
     pub use crate::math::vec2::Vec2;
     pub use crate::math::vec3::Vec3;

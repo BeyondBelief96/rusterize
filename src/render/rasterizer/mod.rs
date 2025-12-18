@@ -20,15 +20,17 @@ use crate::math::vec3::Vec3;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Triangle {
     pub points: [Vec3; 3],
-    pub color: u32,
+    pub color: u32, // Used for wireframe, and when flat shading
+    pub vertex_colors: [u32; 3],
     pub avg_depth: f32,
 }
 
 impl Triangle {
-    pub fn new(points: [Vec3; 3], color: u32, avg_depth: f32) -> Self {
+    pub fn new(points: [Vec3; 3], color: u32, vertex_colors: [u32; 3], avg_depth: f32) -> Self {
         Self {
             points,
             color,
+            vertex_colors,
             avg_depth,
         }
     }

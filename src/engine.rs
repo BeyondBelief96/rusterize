@@ -8,7 +8,7 @@ use crate::colors;
 use crate::light::DirectionalLight;
 use crate::math::mat4::Mat4;
 use crate::math::vec3::Vec3;
-use crate::mesh::{LoadError, Mesh, CUBE_FACES, CUBE_VERTICES};
+use crate::mesh::{LoadError, Mesh};
 use crate::prelude::Vec4;
 use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
 
@@ -30,6 +30,28 @@ pub enum RenderMode {
     Filled,
 }
 
+/// Shading mode for lighting calculations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShadingMode {
+    /// No lighting - use base color only
+    None,
+    /// Flat shading - one color per face based on face normal
+    #[default]
+    Flat,
+    /// Gouraud shading - per-vertex lighting interpolated across face
+    Gouraud,
+}
+
+impl std::fmt::Display for ShadingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShadingMode::None => write!(f, "None"),
+            ShadingMode::Flat => write!(f, "Flat"),
+            ShadingMode::Gouraud => write!(f, "Gouraud"),
+        }
+    }
+}
+
 pub struct Engine {
     renderer: Renderer,
     rasterizer: RasterizerDispatcher,
@@ -38,6 +60,7 @@ pub struct Engine {
     camera_position: Vec3,
     projection_matrix: Mat4,
     render_mode: RenderMode,
+    shading_mode: ShadingMode,
     light: DirectionalLight,
     pub backface_culling: bool,
     pub draw_grid: bool,
@@ -57,10 +80,19 @@ impl Engine {
             camera_position: Vec3::new(0.0, 0.0, -5.0),
             projection_matrix,
             render_mode: RenderMode::default(),
+            shading_mode: ShadingMode::default(),
             light: DirectionalLight::new(Vec3::new(0.0, 0.0, 1.0)),
             backface_culling: true,
             draw_grid: true,
         }
+    }
+
+    pub fn set_shading_mode(&mut self, mode: ShadingMode) {
+        self.shading_mode = mode;
+    }
+
+    pub fn shading_mode(&self) -> ShadingMode {
+        self.shading_mode
     }
 
     pub fn set_render_mode(&mut self, mode: RenderMode) {
@@ -77,16 +109,6 @@ impl Engine {
 
     pub fn rasterizer(&self) -> RasterizerType {
         self.rasterizer.active_type()
-    }
-
-    pub fn load_cube_mesh(&mut self) {
-        self.mesh = Mesh::new(
-            CUBE_VERTICES.to_vec(),
-            CUBE_FACES.to_vec(),
-            Vec3::ZERO,
-            Vec3::ONE,
-            Vec3::ZERO,
-        );
     }
 
     pub fn load_mesh(&mut self, file_path: &str) -> Result<(), LoadError> {
@@ -140,53 +162,92 @@ impl Engine {
         let buffer_height = self.renderer.height();
         let camera_position = self.camera_position;
         let backface_culling = self.backface_culling;
+        let shading_mode = self.shading_mode;
 
         let mut triangles = Vec::new();
+
+        // Full world matrix for positions
         let world_matrix = Mat4::translation(translation.x, translation.y, translation.z)
             * Mat4::rotation_x(rotation.x)
             * Mat4::rotation_y(rotation.y)
             * Mat4::rotation_z(rotation.z)
             * Mat4::scaling(scale.x, scale.y, scale.z);
 
+        // Normal matrix = inverse transpose of model matrix (without translation)
+        // This correctly handles non-uniform scaling
+        let model_matrix = Mat4::rotation_x(rotation.x)
+            * Mat4::rotation_y(rotation.y)
+            * Mat4::rotation_z(rotation.z)
+            * Mat4::scaling(scale.x, scale.y, scale.z);
+
+        let normal_matrix = model_matrix
+            .inverse()
+            .unwrap_or(Mat4::identity())
+            .transpose();
+
         self.mesh_mut().translation().z = camera_position.z;
+
         for face in faces.iter() {
             let face_vertices = [
-                vertices[face.a as usize - 1],
-                vertices[face.b as usize - 1],
-                vertices[face.c as usize - 1],
+                vertices[face.a as usize],
+                vertices[face.b as usize],
+                vertices[face.c as usize],
             ];
 
-            // Model Space --> World Space
-            let mut transformed_vertices = Vec::new();
-            for vertex in face_vertices.iter() {
-                let transformed_vertex = world_matrix * *vertex;
+            // Model Space --> World Space (positions)
+            let transformed_positions = [
+                world_matrix * face_vertices[0].position,
+                world_matrix * face_vertices[1].position,
+                world_matrix * face_vertices[2].position,
+            ];
 
-                transformed_vertices.push(transformed_vertex);
-            }
+            // Calculate face normal (needed for backface culling)
+            let vec_ab = transformed_positions[1] - transformed_positions[0];
+            let vec_ac = transformed_positions[2] - transformed_positions[0];
+            let face_normal = vec_ab.cross(vec_ac);
 
-            // Calculate face normal (needed for both backface culling and lighting)
-            let vec_ab = transformed_vertices[1] - transformed_vertices[0];
-            let vec_ac = transformed_vertices[2] - transformed_vertices[0];
-            let normal = vec_ab.cross(vec_ac);
-
-            // No camera/view space transformation yet, however, we can consider ourselves in camera space at this point.
             // Apply backface culling
             if backface_culling {
-                // In view space, camera is at origin. Vector from vertex to camera is just -vertex.
-                let camera_ray = -transformed_vertices[0];
-                if normal.dot(camera_ray) < 0.0 {
+                let camera_ray = -transformed_positions[0];
+                if face_normal.dot(camera_ray) < 0.0 {
                     continue;
                 }
             }
 
-            // Calculate flat shading based on face normal and light direction
-            let face_normal = normal.normalize();
-            let diffuse = self.light.intensity(face_normal);
-            let total_intensity = (diffuse + self.light.ambient_intensity).min(1.0);
-            let final_color = colors::modulate(colors::FILL, total_intensity);
+            // Calculate colors based on shading mode
+            let (flat_color, vertex_colors) = match shading_mode {
+                ShadingMode::None => {
+                    // No lighting - use base color
+                    let color = colors::FILL;
+                    (color, [color, color, color])
+                }
+                ShadingMode::Flat => {
+                    // Flat shading - one color per face based on face normal
+                    let normal = face_normal.normalize();
+                    let diffuse = self.light.intensity(normal);
+                    let intensity = (diffuse + self.light.ambient_intensity).min(1.0);
+                    let color = colors::modulate(colors::FILL, intensity);
+                    (color, [color, color, color])
+                }
+                ShadingMode::Gouraud => {
+                    // Gouraud shading - per-vertex lighting
+                    let mut vert_colors = [0u32; 3];
+                    for i in 0..3 {
+                        // Transform vertex normal to world space
+                        let world_normal = (normal_matrix * face_vertices[i].normal).normalize();
+                        let diffuse = self.light.intensity(world_normal);
+                        let intensity = (diffuse + self.light.ambient_intensity).min(1.0);
+                        vert_colors[i] = colors::modulate(colors::FILL, intensity);
+                    }
+                    // Use average color for wireframe/flat_color fallback
+                    let avg_color = vert_colors[0]; // Could average, but first vertex is fine
+                    (avg_color, vert_colors)
+                }
+            };
 
+            // Project vertices to screen space
             let mut projected_vertices = Vec::new();
-            for vertex in &transformed_vertices {
+            for vertex in &transformed_positions {
                 let clip_space_vertex =
                     self.projection_matrix * Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
 
@@ -207,9 +268,9 @@ impl Engine {
             }
 
             if projected_vertices.len() == 3 {
-                let avg_depth = (transformed_vertices[0].z
-                    + transformed_vertices[1].z
-                    + transformed_vertices[2].z)
+                let avg_depth = (transformed_positions[0].z
+                    + transformed_positions[1].z
+                    + transformed_positions[2].z)
                     / 3.0;
 
                 triangles.push(Triangle::new(
@@ -218,7 +279,8 @@ impl Engine {
                         projected_vertices[1],
                         projected_vertices[2],
                     ],
-                    final_color,
+                    flat_color,
+                    vertex_colors,
                     avg_depth,
                 ));
             }

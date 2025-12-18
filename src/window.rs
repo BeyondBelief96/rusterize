@@ -33,6 +33,7 @@ pub enum Key {
     C,
     G,
     R,
+    F,
 }
 
 pub struct FrameLimiter {
