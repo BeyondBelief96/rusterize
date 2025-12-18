@@ -46,10 +46,14 @@
 //! - Juan Pineda, "A Parallel Algorithm for Polygon Rasterization" (1988)
 //! - Scratchapixel: <https://www.scratchapixel.com/lessons/3d-basic-rendering/rasterization-practical-implementation>
 
+use super::shader::{
+    FlatShader, GouraudShader, PixelShader, TextureModulateShader, TextureShader,
+};
 use super::{Rasterizer, Triangle};
-use crate::colors::{pack_color, unpack_color};
+use crate::engine::TextureMode;
 use crate::math::vec3::Vec3;
 use crate::render::framebuffer::FrameBuffer;
+use crate::texture::Texture;
 use crate::ShadingMode;
 
 /// Triangle rasterizer using the edge function algorithm.
@@ -103,6 +107,78 @@ impl EdgeFunctionRasterizer {
     fn edge_function(a: Vec3, b: Vec3, p: Vec3) -> f32 {
         (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)
     }
+
+    /// Rasterize a triangle using the provided pixel shader.
+    ///
+    /// This method handles all the common rasterization logic:
+    /// - Bounding box computation and clipping
+    /// - Edge function evaluation
+    /// - Inside/outside testing
+    /// - Barycentric coordinate calculation
+    ///
+    /// The shader is called for each pixel inside the triangle to compute
+    /// the final color.
+    fn rasterize_with_shader<S: PixelShader>(
+        v0: Vec3,
+        v1: Vec3,
+        v2: Vec3,
+        buffer: &mut FrameBuffer,
+        shader: &S,
+    ) {
+        // ─────────────────────────────────────────────────────────────────────
+        // Step 1: Compute bounding box
+        // ─────────────────────────────────────────────────────────────────────
+        let min_x = v0.x.min(v1.x).min(v2.x).floor() as i32;
+        let max_x = v0.x.max(v1.x).max(v2.x).ceil() as i32;
+        let min_y = v0.y.min(v1.y).min(v2.y).floor() as i32;
+        let max_y = v0.y.max(v1.y).max(v2.y).ceil() as i32;
+
+        // Clip to framebuffer bounds
+        let min_x = min_x.max(0);
+        let max_x = max_x.min(buffer.width() as i32 - 1);
+        let min_y = min_y.max(0);
+        let max_y = max_y.min(buffer.height() as i32 - 1);
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Step 2: Compute signed area (2x triangle area)
+        // ─────────────────────────────────────────────────────────────────────
+        let area = Self::edge_function(v0, v1, v2);
+        if area.abs() < f32::EPSILON {
+            return; // Degenerate triangle
+        }
+        let inv_area = 1.0 / area;
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Step 3: Iterate over all pixels in bounding box
+        // ─────────────────────────────────────────────────────────────────────
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                // Sample at pixel center
+                let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
+
+                // Compute edge functions
+                let w0 = Self::edge_function(v1, v2, p);
+                let w1 = Self::edge_function(v2, v0, p);
+                let w2 = Self::edge_function(v0, v1, p);
+
+                // Inside test (handles both CW and CCW winding)
+                let inside = if area > 0.0 {
+                    w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
+                } else {
+                    w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
+                };
+
+                if inside {
+                    // Compute barycentric coordinates
+                    let lambda = [w0 * inv_area, w1 * inv_area, w2 * inv_area];
+
+                    // Delegate to shader for color computation
+                    let color = shader.shade(lambda);
+                    buffer.set_pixel(x, y, color);
+                }
+            }
+        }
+    }
 }
 
 impl Default for EdgeFunctionRasterizer {
@@ -112,148 +188,56 @@ impl Default for EdgeFunctionRasterizer {
 }
 
 impl Rasterizer for EdgeFunctionRasterizer {
-    /// Fills a triangle using the edge function algorithm.
+    /// Fills a triangle using the edge function algorithm with shader-based coloring.
     ///
-    /// # Algorithm Steps
+    /// This method selects the appropriate pixel shader based on texture_mode and
+    /// shading_mode, then delegates to `rasterize_with_shader` for the actual
+    /// rasterization work.
     ///
-    /// 1. **Bounding Box**: Compute axis-aligned bounding box of the triangle,
-    ///    clamped to framebuffer bounds to avoid out-of-bounds access.
+    /// # Shader Selection
     ///
-    /// 2. **Signed Area**: Calculate the signed area (2x) of the triangle using
-    ///    the edge function. This determines winding order and provides the
-    ///    denominator for barycentric coordinate normalization.
-    ///
-    /// 3. **Pixel Iteration**: For each pixel center (x + 0.5, y + 0.5) in the
-    ///    bounding box:
-    ///    - Compute edge functions w0, w1, w2 for edges opposite to v0, v1, v2
-    ///    - Test if pixel is inside by checking all edge functions have same sign
-    ///
-    /// 4. **Shading**: Based on shading mode:
-    ///    - Flat/None: Write solid color directly
-    ///    - Gouraud: Compute barycentric coords and interpolate vertex colors
-    ///
-    /// # Arguments
-    ///
-    /// * `triangle` - The triangle to rasterize, containing vertices and colors
-    /// * `buffer` - The framebuffer to write pixels to
-    /// * `color` - The flat color to use (for Flat/None shading modes)
-    fn fill_triangle(&self, triangle: &Triangle, buffer: &mut FrameBuffer, color: u32) {
-        let v0 = triangle.points[0];
-        let v1 = triangle.points[1];
-        let v2 = triangle.points[2];
+    /// | texture_mode | shading_mode | Shader Used |
+    /// |--------------|--------------|-------------|
+    /// | Replace | * | TextureShader |
+    /// | Modulate | * | TextureModulateShader |
+    /// | None | Gouraud | GouraudShader |
+    /// | None | Flat/None | FlatShader |
+    fn fill_triangle(
+        &self,
+        triangle: &Triangle,
+        buffer: &mut FrameBuffer,
+        color: u32,
+        texture: Option<&Texture>,
+    ) {
+        let [v0, v1, v2] = triangle.points;
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Step 1: Compute bounding box
-        // ─────────────────────────────────────────────────────────────────────
-        // Find the axis-aligned bounding box containing the triangle.
-        // We use floor/ceil to ensure we cover all pixels that might be touched.
-        let min_x = v0.x.min(v1.x).min(v2.x).floor() as i32;
-        let max_x = v0.x.max(v1.x).max(v2.x).ceil() as i32;
-        let min_y = v0.y.min(v1.y).min(v2.y).floor() as i32;
-        let max_y = v0.y.max(v1.y).max(v2.y).ceil() as i32;
-
-        // Clamp to framebuffer bounds to prevent out-of-bounds writes
-        let min_x = min_x.max(0);
-        let max_x = max_x.min(buffer.width() as i32 - 1);
-        let min_y = min_y.max(0);
-        let max_y = max_y.min(buffer.height() as i32 - 1);
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Step 2: Compute signed area (determines winding order)
-        // ─────────────────────────────────────────────────────────────────────
-        // The edge function of v2 against edge (v0 -> v1) gives twice the
-        // signed area of the triangle:
-        // - Positive area = counter-clockwise winding
-        // - Negative area = clockwise winding
-        let area = Self::edge_function(v0, v1, v2);
-
-        // Skip degenerate triangles (collinear vertices = zero area)
-        if area.abs() < f32::EPSILON {
-            return;
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Step 3 & 4: Iterate pixels and shade
-        // ─────────────────────────────────────────────────────────────────────
-        match triangle.shading_mode {
-            ShadingMode::Gouraud => {
-                // Precompute inverse area for barycentric normalization
-                let inv_area = 1.0 / area;
-
-                // Unpack vertex colors to floating-point for interpolation
-                let colors: [(f32, f32, f32); 3] = [
-                    unpack_color(triangle.vertex_colors[0]),
-                    unpack_color(triangle.vertex_colors[1]),
-                    unpack_color(triangle.vertex_colors[2]),
-                ];
-
-                for y in min_y..=max_y {
-                    for x in min_x..=max_x {
-                        // Sample at pixel center (add 0.5 to integer coords)
-                        let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
-
-                        // Compute edge functions for each edge:
-                        // w0 = edge opposite to v0 (edge v1->v2)
-                        // w1 = edge opposite to v1 (edge v2->v0)
-                        // w2 = edge opposite to v2 (edge v0->v1)
-                        let w0 = Self::edge_function(v1, v2, p);
-                        let w1 = Self::edge_function(v2, v0, p);
-                        let w2 = Self::edge_function(v0, v1, p);
-
-                        // Point is inside if all edge functions have same sign as area.
-                        // This handles both CW (all negative) and CCW (all positive) winding.
-                        let inside = if area > 0.0 {
-                            w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
-                        } else {
-                            w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
-                        };
-
-                        if inside {
-                            // Compute barycentric coordinates by normalizing edge functions.
-                            // lambda_i represents the "weight" of vertex i at this point.
-                            // These sum to 1.0 for any point in the triangle.
-                            let lambda0 = w0 * inv_area;
-                            let lambda1 = w1 * inv_area;
-                            let lambda2 = w2 * inv_area;
-
-                            // Interpolate RGB components using barycentric weights
-                            let r = lambda0 * colors[0].0
-                                + lambda1 * colors[1].0
-                                + lambda2 * colors[2].0;
-                            let g = lambda0 * colors[0].1
-                                + lambda1 * colors[1].1
-                                + lambda2 * colors[2].1;
-                            let b = lambda0 * colors[0].2
-                                + lambda1 * colors[1].2
-                                + lambda2 * colors[2].2;
-
-                            buffer.set_pixel(x, y, pack_color(r, g, b, 1.0));
-                        }
-                    }
-                }
+        // Select shader based on texture_mode and shading_mode
+        match (triangle.texture_mode, texture) {
+            // Textured paths (when texture is available)
+            (TextureMode::Replace, Some(tex)) => {
+                let shader = TextureShader::new(tex, triangle.texture_coords);
+                Self::rasterize_with_shader(v0, v1, v2, buffer, &shader);
             }
-            ShadingMode::Flat | ShadingMode::None => {
-                // Flat shading: single color for entire triangle (no interpolation)
-                for y in min_y..=max_y {
-                    for x in min_x..=max_x {
-                        let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
-
-                        let w0 = Self::edge_function(v1, v2, p);
-                        let w1 = Self::edge_function(v2, v0, p);
-                        let w2 = Self::edge_function(v0, v1, p);
-
-                        let inside = if area > 0.0 {
-                            w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
-                        } else {
-                            w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
-                        };
-
-                        if inside {
-                            buffer.set_pixel(x, y, color);
-                        }
-                    }
-                }
+            (TextureMode::Modulate, Some(tex)) => {
+                let shader = TextureModulateShader::new(
+                    tex,
+                    triangle.texture_coords,
+                    triangle.vertex_colors,
+                );
+                Self::rasterize_with_shader(v0, v1, v2, buffer, &shader);
             }
+
+            // Non-textured paths (texture_mode is None, or no texture loaded)
+            _ => match triangle.shading_mode {
+                ShadingMode::Gouraud => {
+                    let shader = GouraudShader::new(triangle.vertex_colors);
+                    Self::rasterize_with_shader(v0, v1, v2, buffer, &shader);
+                }
+                ShadingMode::Flat | ShadingMode::None => {
+                    let shader = FlatShader::new(color);
+                    Self::rasterize_with_shader(v0, v1, v2, buffer, &shader);
+                }
+            },
         }
     }
 }

@@ -9,12 +9,13 @@
 
 mod edgefunction;
 mod scanline;
+pub mod shader;
 
 pub use edgefunction::EdgeFunctionRasterizer;
 pub use scanline::ScanlineRasterizer;
 
 use super::framebuffer::FrameBuffer;
-use crate::{math::vec3::Vec3, ShadingMode};
+use crate::{engine::TextureMode, math::vec3::Vec3, prelude::Vec2, texture::Texture, ShadingMode};
 
 /// A triangle ready for rasterization in screen space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -22,8 +23,10 @@ pub struct Triangle {
     pub points: [Vec3; 3],
     pub color: u32, // Used for wireframe, and when flat shading
     pub vertex_colors: [u32; 3],
+    pub texture_coords: [Vec2; 3],
     pub avg_depth: f32,
     pub shading_mode: ShadingMode,
+    pub texture_mode: TextureMode,
 }
 
 impl Triangle {
@@ -31,15 +34,19 @@ impl Triangle {
         points: [Vec3; 3],
         color: u32,
         vertex_colors: [u32; 3],
+        texture_coords: [Vec2; 3],
         avg_depth: f32,
         shading_mode: ShadingMode,
+        texture_mode: TextureMode,
     ) -> Self {
         Self {
             points,
             color,
             vertex_colors,
+            texture_coords,
             avg_depth,
             shading_mode,
+            texture_mode,
         }
     }
 }
@@ -56,7 +63,13 @@ pub trait Rasterizer {
     /// * `triangle` - The triangle to rasterize
     /// * `buffer` - The frame buffer to draw into
     /// * `color` - The color to fill the triangle with
-    fn fill_triangle(&self, triangle: &Triangle, buffer: &mut FrameBuffer, color: u32);
+    fn fill_triangle(
+        &self,
+        triangle: &Triangle,
+        buffer: &mut FrameBuffer,
+        color: u32,
+        texture: Option<&Texture>,
+    );
 }
 
 /// Available rasterization algorithms.
@@ -111,12 +124,20 @@ impl RasterizerDispatcher {
 
 impl Rasterizer for RasterizerDispatcher {
     #[inline]
-    fn fill_triangle(&self, triangle: &Triangle, buffer: &mut FrameBuffer, color: u32) {
+    fn fill_triangle(
+        &self,
+        triangle: &Triangle,
+        buffer: &mut FrameBuffer,
+        color: u32,
+        texture: Option<&Texture>,
+    ) {
         match self.active {
-            RasterizerType::Scanline => self.scanline.fill_triangle(triangle, buffer, color),
-            RasterizerType::EdgeFunction => {
-                self.edge_function.fill_triangle(triangle, buffer, color)
-            }
+            RasterizerType::Scanline => self
+                .scanline
+                .fill_triangle(triangle, buffer, color, texture),
+            RasterizerType::EdgeFunction => self
+                .edge_function
+                .fill_triangle(triangle, buffer, color, texture),
         }
     }
 }

@@ -34,6 +34,7 @@ pub enum Key {
     G,
     R,
     F,
+    T,
 }
 
 pub struct FrameLimiter {
@@ -172,6 +173,7 @@ impl Window {
                         Keycode::G => Some(Key::G),
                         Keycode::R => Some(Key::R),
                         Keycode::F => Some(Key::F),
+                        Keycode::T => Some(Key::T),
                         _ => None,
                     };
                     if let Some(k) = key {

@@ -13,6 +13,7 @@ use crate::prelude::Vec4;
 use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
 
 pub use crate::render::RasterizerType;
+use crate::texture::Texture;
 
 /// Rendering mode presets
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,12 +43,34 @@ pub enum ShadingMode {
     Gouraud,
 }
 
+/// Texture mapping mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextureMode {
+    /// No texture - use shading color only
+    #[default]
+    None,
+    /// Texture replaces color entirely
+    Replace,
+    /// Texture color modulated by lighting intensity
+    Modulate,
+}
+
 impl std::fmt::Display for ShadingMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ShadingMode::None => write!(f, "None"),
             ShadingMode::Flat => write!(f, "Flat"),
             ShadingMode::Gouraud => write!(f, "Gouraud"),
+        }
+    }
+}
+
+impl std::fmt::Display for TextureMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TextureMode::None => write!(f, "None"),
+            TextureMode::Replace => write!(f, "Replace"),
+            TextureMode::Modulate => write!(f, "Modulate"),
         }
     }
 }
@@ -60,6 +83,8 @@ pub struct Engine {
     camera_position: Vec3,
     projection_matrix: Mat4,
     render_mode: RenderMode,
+    texture: Option<Texture>,
+    texture_mode: TextureMode,
     shading_mode: ShadingMode,
     light: DirectionalLight,
     pub backface_culling: bool,
@@ -79,6 +104,8 @@ impl Engine {
             mesh: Mesh::new(vec![], vec![], Vec3::ZERO, Vec3::ONE, Vec3::ZERO),
             camera_position: Vec3::new(0.0, 0.0, -5.0),
             projection_matrix,
+            texture: None,
+            texture_mode: TextureMode::default(),
             render_mode: RenderMode::default(),
             shading_mode: ShadingMode::default(),
             light: DirectionalLight::new(Vec3::new(0.0, 0.0, 1.0)),
@@ -151,6 +178,26 @@ impl Engine {
         self.renderer.as_bytes()
     }
 
+    pub fn set_texture(&mut self, texture: Texture) {
+        self.texture = Some(texture);
+    }
+
+    pub fn clear_texture(&mut self) {
+        self.texture = None;
+    }
+
+    pub fn texture(&self) -> Option<&Texture> {
+        self.texture.as_ref()
+    }
+
+    pub fn set_texture_mode(&mut self, mode: TextureMode) {
+        self.texture_mode = mode;
+    }
+
+    pub fn texture_mode(&self) -> TextureMode {
+        self.texture_mode
+    }
+
     /// Update the engine state - transforms vertices and builds triangles to render
     pub fn update(&mut self) {
         let faces = self.mesh.faces().to_vec();
@@ -192,6 +239,12 @@ impl Engine {
                 vertices[face.a as usize],
                 vertices[face.b as usize],
                 vertices[face.c as usize],
+            ];
+
+            let face_texcoords = [
+                face_vertices[0].texel,
+                face_vertices[1].texel,
+                face_vertices[2].texel,
             ];
 
             // Model Space --> World Space (positions)
@@ -279,8 +332,10 @@ impl Engine {
                     ],
                     flat_color,
                     vertex_colors,
+                    face_texcoords,
                     avg_depth,
                     shading_mode,
+                    self.texture_mode,
                 ));
             }
         }
@@ -313,8 +368,12 @@ impl Engine {
         if draw_filled {
             let mut fb = self.renderer.as_framebuffer();
             for triangle in &self.triangles_to_render {
-                self.rasterizer
-                    .fill_triangle(triangle, &mut fb, triangle.color);
+                self.rasterizer.fill_triangle(
+                    triangle,
+                    &mut fb,
+                    triangle.color,
+                    self.texture.as_ref(),
+                );
             }
         }
 

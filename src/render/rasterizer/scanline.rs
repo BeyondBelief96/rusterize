@@ -69,8 +69,10 @@
 
 use super::{Rasterizer, Triangle};
 use crate::colors::{lerp_color, pack_color, unpack_color};
+use crate::engine::TextureMode;
 use crate::math::vec3::Vec3;
 use crate::render::framebuffer::FrameBuffer;
+use crate::texture::Texture;
 use crate::ShadingMode;
 
 /// Scanline-based triangle rasterizer.
@@ -429,7 +431,13 @@ impl Rasterizer for ScanlineRasterizer {
     /// * `triangle` - Triangle to rasterize with vertices, colors, and shading mode
     /// * `buffer` - Framebuffer to write pixels to
     /// * `color` - Flat color to use (for Flat/None shading modes)
-    fn fill_triangle(&self, triangle: &Triangle, buffer: &mut FrameBuffer, color: u32) {
+    fn fill_triangle(
+        &self,
+        triangle: &Triangle,
+        buffer: &mut FrameBuffer,
+        color: u32,
+        texture: Option<&Texture>,
+    ) {
         let mut v0 = triangle.points[0];
         let mut v1 = triangle.points[1];
         let mut v2 = triangle.points[2];
