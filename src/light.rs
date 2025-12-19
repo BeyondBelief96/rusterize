@@ -10,6 +10,8 @@ pub struct DirectionalLight {
     /// The normalized direction the light is pointing (not where it comes from).
     pub direction: Vec3,
     pub ambient_intensity: f32,
+    /// Multiplier for the diffuse lighting contribution (default: 1.0)
+    pub diffuse_strength: f32,
 }
 
 impl DirectionalLight {
@@ -19,6 +21,7 @@ impl DirectionalLight {
         DirectionalLight {
             direction: direction.normalize(),
             ambient_intensity: 0.1,
+            diffuse_strength: 1.0,
         }
     }
 

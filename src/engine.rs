@@ -268,18 +268,23 @@ impl Engine {
             }
 
             // Calculate colors based on shading mode
+            // Use white for textured modulate mode so lighting doesn't darken the texture
+            let base_color = if self.texture_mode == TextureMode::Modulate {
+                0xFFFFFFFF // White - full brightness when lit
+            } else {
+                colors::FILL
+            };
             let (flat_color, vertex_colors) = match shading_mode {
                 ShadingMode::None => {
                     // No lighting - use base color
-                    let color = colors::FILL;
-                    (color, [color, color, color])
+                    (base_color, [base_color, base_color, base_color])
                 }
                 ShadingMode::Flat => {
                     // Flat shading - one color per face based on face normal
                     let normal = face_normal.normalize();
-                    let diffuse = self.light.intensity(normal);
+                    let diffuse = self.light.intensity(normal) * self.light.diffuse_strength;
                     let intensity = (diffuse + self.light.ambient_intensity).min(1.0);
-                    let color = colors::modulate(colors::FILL, intensity);
+                    let color = colors::modulate(base_color, intensity);
                     (color, [color, color, color])
                 }
                 ShadingMode::Gouraud => {
@@ -287,9 +292,9 @@ impl Engine {
                     let mut vert_colors = [0u32; 3];
                     for i in 0..3 {
                         let world_normal = (normal_matrix * face_vertices[i].normal).normalize();
-                        let diffuse = self.light.intensity(world_normal);
+                        let diffuse = self.light.intensity(world_normal) * self.light.diffuse_strength;
                         let intensity = (diffuse + self.light.ambient_intensity).min(1.0);
-                        vert_colors[i] = colors::modulate(colors::FILL, intensity);
+                        vert_colors[i] = colors::modulate(base_color, intensity);
                     }
                     let avg_color = vert_colors[0];
                     (avg_color, vert_colors)
