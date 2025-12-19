@@ -80,11 +80,12 @@ This affects:
    - Lighting: Computed per-face (flat) or per-vertex (Gouraud) and stored in `vertex_colors`
    - Backface culling via cross product normal and dot product with camera ray
    - Perspective projection using left-handed perspective matrix
-   - Depth sorting via painter's algorithm (back-to-front)
+   - Clip-space W stored in vertex z component for depth testing
 
 3. **Rasterization** (`rasterizer/`): Two algorithms available:
    - **Scanline** (`scanline.rs`): Flat-top/flat-bottom triangle decomposition
    - **Edge Function** (`edgefunction.rs`): Bounding box iteration with edge function tests (GPU-style)
+   - Both use per-pixel depth testing via z-buffer
 
 4. **Display** (`window.rs`): FrameBuffer bytes are uploaded to an SDL streaming texture (ARGB8888) and copied to canvas.
 
@@ -110,6 +111,15 @@ Single directional light (`light.rs`):
 - Direction-based diffuse lighting
 - Ambient intensity for shadow areas
 - Lighting is pre-computed in `engine.rs:update()` and stored in triangle's `vertex_colors`
+
+### Depth Buffer (Z-Buffer)
+
+Hidden surface removal uses a per-pixel depth buffer (`framebuffer.rs`, `renderer.rs`):
+- Stores **1/w** values (reciprocal of clip-space W) for each pixel
+- Using 1/w because it can be linearly interpolated in screen space
+- Larger 1/w values are closer to the camera
+- Depth buffer cleared to 0.0 (infinitely far) at frame start
+- Replaces painter's algorithm - no triangle sorting needed
 
 ### Module Visibility
 

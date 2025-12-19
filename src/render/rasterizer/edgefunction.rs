@@ -150,9 +150,15 @@ impl EdgeFunctionRasterizer {
     /// - Edge function evaluation
     /// - Inside/outside testing
     /// - Barycentric coordinate calculation
+    /// - Depth interpolation and testing
     ///
     /// The shader is called for each pixel inside the triangle to compute
-    /// the final color.
+    /// the final color. Depth testing uses interpolated 1/w values.
+    ///
+    /// # Arguments
+    /// * `v0, v1, v2` - Triangle vertices where x,y are screen coords and z stores clip-space W
+    /// * `buffer` - Framebuffer with color and depth buffers
+    /// * `shader` - Pixel shader for color computation
     fn rasterize_with_shader<S: PixelShader>(
         v0: Vec3,
         v1: Vec3,
@@ -160,6 +166,11 @@ impl EdgeFunctionRasterizer {
         buffer: &mut FrameBuffer,
         shader: &S,
     ) {
+        // Precompute 1/w for each vertex (z component stores clip-space W)
+        // These can be linearly interpolated in screen space (1/ z)
+        let inv_w0 = 1.0 / v0.z;
+        let inv_w1 = 1.0 / v1.z;
+        let inv_w2 = 1.0 / v2.z;
         // ─────────────────────────────────────────────────────────────────────
         // Step 1: Compute bounding box
         // ─────────────────────────────────────────────────────────────────────
@@ -225,9 +236,12 @@ impl EdgeFunctionRasterizer {
                     // Compute barycentric coordinates (use original w values, not biased)
                     let lambda = [w0 * inv_area, w1 * inv_area, w2 * inv_area];
 
+                    // Interpolate 1/w for depth testing (linear in screen space)
+                    let depth = lambda[0] * inv_w0 + lambda[1] * inv_w1 + lambda[2] * inv_w2;
+
                     // Delegate to shader for color computation
                     let color = shader.shade(lambda);
-                    buffer.set_pixel(x, y, color);
+                    buffer.set_pixel_with_depth(x, y, depth, color);
                 }
             }
         }

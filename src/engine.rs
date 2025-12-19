@@ -292,7 +292,8 @@ impl Engine {
                     let mut vert_colors = [0u32; 3];
                     for i in 0..3 {
                         let world_normal = (normal_matrix * face_vertices[i].normal).normalize();
-                        let diffuse = self.light.intensity(world_normal) * self.light.diffuse_strength;
+                        let diffuse =
+                            self.light.intensity(world_normal) * self.light.diffuse_strength;
                         let intensity = (diffuse + self.light.ambient_intensity).min(1.0);
                         vert_colors[i] = colors::modulate(base_color, intensity);
                     }
@@ -304,6 +305,7 @@ impl Engine {
             // Project vertices to screen space
             let mut projected_vertices = Vec::new();
             for vertex in &transformed_positions {
+                // After projecting to clip space, w should store the original depth value. We then divide by w to get the normalized device coordinates.
                 let clip_space_vertex =
                     self.projection_matrix * Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
 
@@ -345,16 +347,14 @@ impl Engine {
             }
         }
 
-        // Sort triangles by depth using the painter's algorithm (descending order)
-        // Further away triangles are drawn first
-        triangles.sort_by(|a, b| b.avg_depth.partial_cmp(&a.avg_depth).unwrap());
-
+        // No sorting needed - depth buffer handles hidden surface removal
         self.triangles_to_render = triangles;
     }
 
     /// Render the current frame
     pub fn render(&mut self) {
         self.renderer.clear(colors::BACKGROUND);
+        self.renderer.clear_depth();
 
         if self.draw_grid {
             self.renderer.draw_grid(50, colors::GRID);

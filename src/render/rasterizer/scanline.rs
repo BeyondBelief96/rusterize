@@ -148,7 +148,7 @@ impl ScanlineRasterizer {
     /// using the original vertex order.
     ///
     /// # Arguments
-    /// * `v0, v1, v2` - Original (unsorted) triangle vertices
+    /// * `v0, v1, v2` - Original (unsorted) triangle vertices (z stores clip-space W)
     /// * `buffer` - Framebuffer to write to
     /// * `shader` - Pixel shader for color computation
     fn rasterize_with_shader<S: PixelShader>(
@@ -158,6 +158,10 @@ impl ScanlineRasterizer {
         buffer: &mut FrameBuffer,
         shader: &S,
     ) {
+        // Precompute 1/w for each vertex (z component stores clip-space W)
+        // These can be linearly interpolated in screen space for depth testing
+        let inv_w = [1.0 / v0.z, 1.0 / v1.z, 1.0 / v2.z];
+
         // Convert to Vec2 for barycentric calculations (only x, y matter)
         let v0_2d = Vec2::new(v0.x, v0.y);
         let v1_2d = Vec2::new(v1.x, v1.y);
@@ -181,12 +185,12 @@ impl ScanlineRasterizer {
         if (sv1.y - sv2.y).abs() < f32::EPSILON {
             // Flat-bottom triangle
             Self::fill_flat_bottom_with_shader(
-                sv0, sv1, sv2, v0_2d, v1_2d, v2_2d, inv_area, buffer, shader,
+                sv0, sv1, sv2, v0_2d, v1_2d, v2_2d, inv_w, inv_area, buffer, shader,
             );
         } else if (sv0.y - sv1.y).abs() < f32::EPSILON {
             // Flat-top triangle
             Self::fill_flat_top_with_shader(
-                sv0, sv1, sv2, v0_2d, v1_2d, v2_2d, inv_area, buffer, shader,
+                sv0, sv1, sv2, v0_2d, v1_2d, v2_2d, inv_w, inv_area, buffer, shader,
             );
         } else {
             // General triangle - split into flat-bottom + flat-top
@@ -205,6 +209,7 @@ impl ScanlineRasterizer {
                 v0_2d,
                 v1_2d,
                 v2_2d, // Always use original for barycentrics
+                inv_w,
                 inv_area,
                 buffer,
                 shader,
@@ -218,6 +223,7 @@ impl ScanlineRasterizer {
                 v0_2d,
                 v1_2d,
                 v2_2d,
+                inv_w,
                 inv_area,
                 buffer,
                 shader,
@@ -230,6 +236,7 @@ impl ScanlineRasterizer {
     /// # Arguments
     /// * `sv0, sv1, sv2` - Sorted vertices for scanline traversal
     /// * `v0, v1, v2` - Original vertices (Vec2) for barycentric computation
+    /// * `inv_w` - 1/w values for each original vertex (for depth interpolation)
     /// * `inv_area` - 1/area for barycentric normalization
     fn fill_flat_bottom_with_shader<S: PixelShader>(
         sv0: Vec3, // Top vertex (sorted)
@@ -238,6 +245,7 @@ impl ScanlineRasterizer {
         v0: Vec2,  // Original vertices for barycentrics
         v1: Vec2,
         v2: Vec2,
+        inv_w: [f32; 3], // 1/w for each original vertex
         inv_area: f32,
         buffer: &mut FrameBuffer,
         shader: &S,
@@ -268,8 +276,11 @@ impl ScanlineRasterizer {
                 let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
                 let lambda = barycentric(v0, v1, v2, p, inv_area);
 
+                // Interpolate 1/w for depth testing (linear in screen space)
+                let depth = lambda[0] * inv_w[0] + lambda[1] * inv_w[1] + lambda[2] * inv_w[2];
+
                 let color = shader.shade(lambda);
-                buffer.set_pixel(x, y, color);
+                buffer.set_pixel_with_depth(x, y, depth, color);
             }
         }
     }
@@ -279,6 +290,7 @@ impl ScanlineRasterizer {
     /// # Arguments
     /// * `sv0, sv1, sv2` - Sorted vertices for scanline traversal
     /// * `v0, v1, v2` - Original vertices (Vec2) for barycentric computation
+    /// * `inv_w` - 1/w values for each original vertex (for depth interpolation)
     /// * `inv_area` - 1/area for barycentric normalization
     fn fill_flat_top_with_shader<S: PixelShader>(
         sv0: Vec3, // Top-left (sorted)
@@ -287,6 +299,7 @@ impl ScanlineRasterizer {
         v0: Vec2,  // Original vertices for barycentrics
         v1: Vec2,
         v2: Vec2,
+        inv_w: [f32; 3], // 1/w for each original vertex
         inv_area: f32,
         buffer: &mut FrameBuffer,
         shader: &S,
@@ -316,8 +329,11 @@ impl ScanlineRasterizer {
                 let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
                 let lambda = barycentric(v0, v1, v2, p, inv_area);
 
+                // Interpolate 1/w for depth testing (linear in screen space)
+                let depth = lambda[0] * inv_w[0] + lambda[1] * inv_w[1] + lambda[2] * inv_w[2];
+
                 let color = shader.shade(lambda);
-                buffer.set_pixel(x, y, color);
+                buffer.set_pixel_with_depth(x, y, depth, color);
             }
         }
     }

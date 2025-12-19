@@ -9,6 +9,7 @@ use crate::colors;
 
 pub struct Renderer {
     color_buffer: Vec<u32>,
+    depth_buffer: Vec<f32>,
     width: u32,
     height: u32,
 }
@@ -18,6 +19,7 @@ impl Renderer {
         let size = (width * height) as usize;
         Self {
             color_buffer: vec![colors::BACKGROUND; size],
+            depth_buffer: vec![0.0; size], // 0.0 = infinitely far (1/w where w -> infinity)
             width,
             height,
         }
@@ -26,6 +28,7 @@ impl Renderer {
     pub fn resize(&mut self, width: u32, height: u32) {
         let size = (width * height) as usize;
         self.color_buffer = vec![colors::BACKGROUND; size];
+        self.depth_buffer = vec![0.0; size];
         self.width = width;
         self.height = height;
     }
@@ -40,6 +43,12 @@ impl Renderer {
 
     pub fn clear(&mut self, color: u32) {
         self.color_buffer.fill(color);
+    }
+
+    /// Clear the depth buffer to prepare for a new frame.
+    /// Sets all depths to 0.0 (infinitely far, since we store 1/w).
+    pub fn clear_depth(&mut self) {
+        self.depth_buffer.fill(0.0);
     }
 
     pub fn set_pixel(&mut self, x: i32, y: i32, color: u32) {
@@ -166,8 +175,13 @@ impl Renderer {
         }
     }
 
-    /// Get a mutable FrameBuffer view into the color buffer.
+    /// Get a mutable FrameBuffer view into the color and depth buffers.
     pub fn as_framebuffer(&mut self) -> FrameBuffer<'_> {
-        FrameBuffer::new(&mut self.color_buffer, self.width, self.height)
+        FrameBuffer::new(
+            &mut self.color_buffer,
+            &mut self.depth_buffer,
+            self.width,
+            self.height,
+        )
     }
 }
