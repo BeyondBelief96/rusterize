@@ -22,10 +22,10 @@ fn main() -> Result<(), String> {
     let mut engine = Engine::new(window.width(), window.height());
 
     engine
-        .load_mesh("assets/bunny.obj")
+        .load_mesh("assets/crab.obj")
         .map_err(|e| e.to_string())?;
 
-    let texture = Texture::from_file("assets/f22.png").map_err(|e| e.to_string())?;
+    let texture = Texture::from_file("assets/crab.png").map_err(|e| e.to_string())?;
     engine.set_texture(texture);
 
     // Start with texture mode enabled so we can see it

@@ -45,16 +45,40 @@ impl Renderer {
         self.color_buffer.fill(color);
     }
 
+    #[inline]
     /// Clear the depth buffer to prepare for a new frame.
     /// Sets all depths to 0.0 (infinitely far, since we store 1/w).
     pub fn clear_depth(&mut self) {
         self.depth_buffer.fill(0.0);
     }
 
+    #[inline]
     pub fn set_pixel(&mut self, x: i32, y: i32, color: u32) {
         if x >= 0 && x < self.width as i32 && y >= 0 && y < self.height as i32 {
             let index = (y as u32 * self.width + x as u32) as usize;
             self.color_buffer[index] = color;
+        }
+    }
+
+    /// Set a pixel at (x, y) with depth testing.
+    ///
+    /// The pixel is only written if the depth value is greater than the existing
+    /// depth at that location (closer to camera, since we store 1/w).
+    /// Silently ignores out-of-bounds coordinates.
+    ///
+    /// # Arguments
+    /// * `x`, `y` - Pixel coordinates
+    /// * `inv_depth` - The 1/w value for this pixel (larger = closer)
+    /// * `color` - The color to write if depth test passes
+    #[inline]
+    pub fn set_pixel_with_depth(&mut self, x: i32, y: i32, inv_depth: f32, color: u32) {
+        if x >= 0 && x < self.width as i32 && y >= 0 && y < self.height as i32 {
+            let idx = (y as u32 * self.width + x as u32) as usize;
+            // Depth test: larger 1/w means closer to camera
+            if inv_depth > self.depth_buffer[idx] {
+                self.depth_buffer[idx] = inv_depth;
+                self.color_buffer[idx] = color;
+            }
         }
     }
 
@@ -68,6 +92,7 @@ impl Renderer {
         }
     }
 
+    #[inline]
     pub fn draw_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: u32) {
         for dy in 0..height {
             for dx in 0..width {
@@ -79,12 +104,36 @@ impl Renderer {
     pub fn draw_triangle_wireframe(&mut self, triangle: &Triangle, color: u32) {
         let [p0, p1, p2] = triangle.points;
 
-        self.draw_line_bresenham(p0.x as i32, p0.y as i32, p1.x as i32, p1.y as i32, color);
-        self.draw_line_bresenham(p1.x as i32, p1.y as i32, p2.x as i32, p2.y as i32, color);
-        self.draw_line_bresenham(p2.x as i32, p2.y as i32, p0.x as i32, p0.y as i32, color);
+        self.draw_line_bresenham(
+            p0.x as i32,
+            p0.y as i32,
+            p0.z,
+            p1.x as i32,
+            p1.y as i32,
+            p1.z,
+            color,
+        );
+        self.draw_line_bresenham(
+            p1.x as i32,
+            p1.y as i32,
+            p1.z,
+            p2.x as i32,
+            p2.y as i32,
+            p2.z,
+            color,
+        );
+        self.draw_line_bresenham(
+            p2.x as i32,
+            p2.y as i32,
+            p2.z,
+            p0.x as i32,
+            p0.y as i32,
+            p0.z,
+            color,
+        );
     }
 
-    /// Draws a line between two points using Bresenham's line algorithm.
+    /// Draws a line between two points using Bresenham's line algorithm with depth testing.
     ///
     /// Bresenham's algorithm efficiently determines which pixels to illuminate
     /// by using only integer arithmetic. It works by tracking an "error" term
@@ -94,11 +143,39 @@ impl Renderer {
     /// distance), we decide whether to also step along the minor axis based on
     /// accumulated error. When the error exceeds a threshold, we step diagonally
     /// instead of straight.
-    pub fn draw_line_bresenham(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
+    ///
+    /// Depth (1/w) is linearly interpolated along the line for proper depth testing.
+    #[inline]
+    pub fn draw_line_bresenham(
+        &mut self,
+        x0: i32,
+        y0: i32,
+        w0: f32,
+        x1: i32,
+        y1: i32,
+        w1: f32,
+        color: u32,
+    ) {
         // Calculate the absolute distances in each axis.
         // These represent how far we need to travel horizontally and vertically.
         let dx = (x1 - x0).abs();
         let dy = (y1 - y0).abs();
+
+        // Depth bias so wireframes render slightly in front of filled triangles
+        const WIREFRAME_DEPTH_BIAS: f32 = 0.0001;
+
+        // Total number of steps (max of dx, dy)
+        let steps = dx.max(dy);
+        if steps == 0 {
+            // Single pixel line
+            let inv_depth = 1.0 / w0 + WIREFRAME_DEPTH_BIAS;
+            self.set_pixel_with_depth(x0, y0, inv_depth, color);
+            return;
+        }
+
+        // Precompute 1/w for depth interpolation (linear in screen space)
+        let inv_w0 = 1.0 / w0 + WIREFRAME_DEPTH_BIAS;
+        let inv_w1 = 1.0 / w1 + WIREFRAME_DEPTH_BIAS;
 
         // Determine the step direction for each axis.
         // +1 if we're moving in the positive direction, -1 if negative.
@@ -113,14 +190,21 @@ impl Renderer {
 
         let mut x = x0;
         let mut y = y0;
+        let mut step = 0;
 
         loop {
-            self.set_pixel(x, y, color);
+            // Interpolate depth along the line
+            let t = step as f32 / steps as f32;
+            let inv_depth = inv_w0 + t * (inv_w1 - inv_w0);
+
+            self.set_pixel_with_depth(x, y, inv_depth, color);
 
             // Check if we've reached the destination
             if x == x1 && y == y1 {
                 break;
             }
+
+            step += 1;
 
             // Double the error for comparison (avoids floating point).
             // We compare against -dy and dx to decide movement direction.
