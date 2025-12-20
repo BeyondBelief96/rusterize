@@ -4,12 +4,11 @@
 //! the rendering pipeline including mesh transformation, projection, and
 //! rasterization.
 
+use crate::camera::FpsCamera;
 use crate::colors;
 use crate::light::DirectionalLight;
-use crate::math::mat4::Mat4;
-use crate::math::vec3::Vec3;
 use crate::mesh::{LoadError, Mesh};
-use crate::prelude::Vec4;
+use crate::prelude::{Mat4, Vec3, Vec4};
 use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
 
 pub use crate::render::RasterizerType;
@@ -80,7 +79,7 @@ pub struct Engine {
     rasterizer: RasterizerDispatcher,
     triangles_to_render: Vec<Triangle>,
     mesh: Mesh,
-    camera_position: Vec3,
+    camera: FpsCamera,
     projection_matrix: Mat4,
     render_mode: RenderMode,
     texture: Option<Texture>,
@@ -102,7 +101,7 @@ impl Engine {
             rasterizer: RasterizerDispatcher::new(RasterizerType::default()),
             triangles_to_render: Vec::new(),
             mesh: Mesh::new(vec![], vec![], Vec3::ZERO, Vec3::ONE, Vec3::ZERO),
-            camera_position: Vec3::new(0.0, 0.0, -5.0),
+            camera: FpsCamera::new(Vec3::new(0.0, 0.0, -5.0)),
             projection_matrix,
             texture: None,
             texture_mode: TextureMode::default(),
@@ -149,12 +148,20 @@ impl Engine {
             Mat4::perspective_lh(45.0, width as f32 / height as f32, 0.1, 100.0);
     }
 
+    pub fn camera(&self) -> &FpsCamera {
+        &self.camera
+    }
+
+    pub fn camera_mut(&mut self) -> &mut FpsCamera {
+        &mut self.camera
+    }
+
     pub fn set_camera_position(&mut self, position: Vec3) {
-        self.camera_position = position;
+        self.camera.set_position(position);
     }
 
     pub fn camera_position(&self) -> Vec3 {
-        self.camera_position
+        self.camera.position()
     }
 
     pub fn set_light_direction(&mut self, direction: Vec3) {
@@ -207,7 +214,9 @@ impl Engine {
         let scale = self.mesh().scale();
         let buffer_width = self.renderer.width();
         let buffer_height = self.renderer.height();
-        let camera_position = self.camera_position;
+        let camera_position = self.camera.position();
+        let view_matrix = self.camera.view_matrix();
+        let view_projection = self.projection_matrix * view_matrix;
         let backface_culling = self.backface_culling;
         let shading_mode = self.shading_mode;
 
@@ -231,8 +240,6 @@ impl Engine {
             .inverse()
             .unwrap_or(Mat4::identity())
             .transpose();
-
-        self.mesh_mut().translation().z = camera_position.z;
 
         for face in faces.iter() {
             let face_vertices = [
@@ -261,7 +268,7 @@ impl Engine {
 
             // Apply backface culling
             if backface_culling {
-                let camera_ray = -transformed_positions[0];
+                let camera_ray = camera_position - transformed_positions[0];
                 if face_normal.dot(camera_ray) < 0.0 {
                     continue;
                 }
@@ -305,9 +312,9 @@ impl Engine {
             // Projected vertices will store screen space coordinates where (x, y) represents the pixel coordinates and z represents the original depth value in world space.
             let mut projected_vertices = Vec::new();
             for vertex in &transformed_positions {
-                // After projecting to clip space, w should store the original depth value. We then divide by w to get the normalized device coordinates.
+                // Transform to clip space: view_projection = projection * view
                 let clip_space_vertex =
-                    self.projection_matrix * Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
+                    view_projection * Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
 
                 // w <= 0 means vertex is behind or on the near plane.
                 if clip_space_vertex.w <= 0.0 {

@@ -1,19 +1,26 @@
+use russsty::camera::FpsCameraController;
 use russsty::engine::{Engine, RasterizerType, RenderMode, TextureMode};
+use russsty::math::vec3::Vec3;
 use russsty::texture::Texture;
 use russsty::window::{
     FpsCounter, FrameLimiter, Key, Window, WindowEvent, WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use russsty::ShadingMode;
 
-fn format_window_title(fps: f64, engine: &Engine) -> String {
+fn format_window_title(fps: f64, engine: &Engine, mouse_captured: bool) -> String {
     format!(
-        "Russsty | FPS: {:.1} | {} | Cull: {} | render mode: {:?} | shading mode: {:?} | texture mode: {:?}",
+        "Russsty | FPS: {:.1} | {} | Cull: {} | render: {:?} | shade: {:?} | tex: {:?} | {}",
         fps,
         engine.rasterizer(),
         if engine.backface_culling { "ON" } else { "OFF" },
         engine.render_mode(),
         engine.shading_mode(),
-        engine.texture_mode()
+        engine.texture_mode(),
+        if mouse_captured {
+            "WASD to move, mouse to look, M to release"
+        } else {
+            "M to capture mouse"
+        }
     )
 }
 
@@ -31,12 +38,19 @@ fn main() -> Result<(), String> {
     // Start with texture mode enabled so we can see it
     engine.set_texture_mode(TextureMode::Replace);
 
+    // Position camera to see the mesh
+    engine.camera_mut().set_position(Vec3::new(0.0, 0.0, -10.0));
+
+    // Camera controller for FPS-style movement
+    let camera_controller = FpsCameraController::default();
+
     let mut frame_limiter = FrameLimiter::new(&window);
     let mut fps_counter = FpsCounter::new();
 
     loop {
         match window.poll_events() {
             WindowEvent::Quit => break,
+            WindowEvent::KeyPress(Key::Escape) => break, // Escape quits
             WindowEvent::Resize(w, h) => {
                 window.resize(w, h)?;
                 engine.resize(w, h);
@@ -49,6 +63,7 @@ fn main() -> Result<(), String> {
                 Key::Num5 => engine.set_render_mode(RenderMode::Filled),
                 Key::C => engine.backface_culling = !engine.backface_culling,
                 Key::G => engine.draw_grid = !engine.draw_grid,
+                Key::M => window.toggle_mouse_capture(),
                 Key::R => {
                     let next = match engine.rasterizer() {
                         RasterizerType::Scanline => RasterizerType::EdgeFunction,
@@ -72,25 +87,29 @@ fn main() -> Result<(), String> {
                     };
                     engine.set_texture_mode(next);
                 }
+                _ => {}
             },
             WindowEvent::None => {}
         }
 
-        let _delta_time = frame_limiter.wait_and_get_delta(&window);
+        let delta_ms = frame_limiter.wait_and_get_delta(&window);
+        let delta_sec = delta_ms as f32 / 1000.0;
 
-        let mesh = engine.mesh_mut();
-        mesh.translation_mut().z = 10.0;
-
-        //mesh.rotation_mut().x += 0.01;
-        mesh.rotation_mut().y += 0.01;
-        // mesh.rotation_mut().z += 0.01;
+        // Update camera when mouse is captured
+        if window.is_mouse_captured() {
+            camera_controller.update(engine.camera_mut(), window.input_state(), delta_sec);
+        }
 
         engine.update();
         engine.render();
         window.present(engine.frame_buffer())?;
 
         if let Some(fps) = fps_counter.tick() {
-            window.set_title(&format_window_title(fps, &engine));
+            window.set_title(&format_window_title(
+                fps,
+                &engine,
+                window.is_mouse_captured(),
+            ));
         }
     }
 

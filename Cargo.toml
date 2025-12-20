@@ -17,4 +17,4 @@ name = "rasterizer"
 harness = false
 
 [profile.release]
-lto = "fat" # Use "fat" LTO for maximum optimization
+lto = "thin"

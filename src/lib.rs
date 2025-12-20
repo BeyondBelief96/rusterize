@@ -14,6 +14,7 @@
 //! ```
 
 // Public API - exposed to library consumers
+pub mod camera;
 pub mod colors;
 pub mod engine;
 pub mod light;
@@ -37,13 +38,23 @@ pub use mesh::{LoadError, Mesh};
 /// use russsty::prelude::*;
 /// ```
 pub mod prelude {
+    // Camera
+    pub use crate::camera::{FpsCamera, FpsCameraController};
+
+    // Engine
     pub use crate::engine::{Engine, RenderMode, ShadingMode, TextureMode};
+
+    // Math
     pub use crate::math::mat4::Mat4;
     pub use crate::math::vec2::Vec2;
     pub use crate::math::vec3::Vec3;
     pub use crate::math::vec4::Vec4;
+
+    // Rendering
     pub use crate::render::RasterizerType;
-    pub use crate::window::{FpsCounter, FrameLimiter, Key, Window, WindowEvent};
+
+    // Window & Input
+    pub use crate::window::{FpsCounter, FrameLimiter, InputState, Key, Window, WindowEvent};
 }
 
 /// Module exposing internals for benchmarking. Not part of the stable API.

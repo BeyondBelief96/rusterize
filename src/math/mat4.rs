@@ -108,17 +108,29 @@ impl Mat4 {
         ])
     }
 
-    /// Creates a perspective matrix with right-handed coordinate system.
-    pub fn perspective_rh(fov: f32, aspect_ratio: f32, near: f32, far: f32) -> Self {
-        let t = near * (fov / 2.0).tan();
-        let r = t * aspect_ratio;
-        let a = (far + near) / (far - near);
-        let b = -2.0 * far * near / (far - near);
-        Mat4::new([
-            [near / r, 0.0, 0.0, 0.0],
-            [0.0, near / t, 0.0, 0.0],
-            [0.0, 0.0, a, b],
-            [0.0, 0.0, 1.0, 0.0],
+    /// Creates a view matrix with left-handed coordinate system.
+    ///
+    /// # Arguments
+    ///
+    /// * `eye` - The position of the camera.
+    /// * `target` - The point the camera is looking at.
+    /// * `up` - The up direction of the camera.
+    ///
+    /// # Returns
+    ///
+    /// A view matrix.
+    pub fn look_at_lh(eye: Vec3, target: Vec3, up: Vec3) -> Self {
+        let forward = (target - eye).normalize();
+        let right = up.cross(forward).normalize();
+        let up = forward.cross(right).normalize();
+
+        // Rotation matrix (transpose of basis vectors as rows)
+        // Combined with translation to eye position
+        Self::new([
+            [right.x, right.y, right.z, -right.dot(eye)],
+            [up.x, up.y, up.z, -up.dot(eye)],
+            [forward.x, forward.y, forward.z, -forward.dot(eye)],
+            [0.0, 0.0, 0.0, 1.0],
         ])
     }
 
