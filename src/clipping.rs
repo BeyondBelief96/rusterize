@@ -75,7 +75,7 @@ impl ClipPolygon {
     /// Clip this polygon against a single plane using the Sutherland-Hodgman algorithm.
     /// Returns a new polygon with the clipped vertices.
     pub fn clip_against_plane(&self, plane: Plane) -> Self {
-        if self.vertices.is_empty() {
+        if self.vertices.is_empty() || self.vertices.len() < 3 {
             return Self { vertices: vec![] };
         }
 
