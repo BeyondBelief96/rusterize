@@ -12,9 +12,5 @@ tobj = "4.0.3"
 [dev-dependencies]
 criterion = "0.5"
 
-[[bench]]
-name = "rasterizer"
-harness = false
-
 [profile.release]
 lto = "thin"

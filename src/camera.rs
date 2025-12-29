@@ -1,10 +1,10 @@
-//! First-person camera using matrix-based orientation.
+//! First-person camera
 //!
 //! # Coordinate System
 //!
 //! Uses a **left-handed** coordinate system:
 //! - X: positive right
-//! - Y: positive down
+//! - Y: positive up
 //! - Z: positive forward (into screen)
 //!
 //! # Orientation

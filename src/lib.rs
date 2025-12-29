@@ -19,13 +19,13 @@ pub mod colors;
 pub mod engine;
 pub mod light;
 pub mod math;
+pub mod texture;
 pub mod window;
 
 // Internal modules - used within the crate only
+pub(crate) mod clipping;
 pub(crate) mod mesh;
 pub(crate) mod render;
-pub(crate) mod sorting;
-pub mod texture;
 
 // Re-export commonly needed types at crate root for convenience
 pub use engine::{Engine, RasterizerType, RenderMode, ShadingMode};

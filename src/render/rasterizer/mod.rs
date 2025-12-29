@@ -24,7 +24,6 @@ pub struct Triangle {
     pub color: u32, // Used for wireframe, and when flat shading
     pub vertex_colors: [u32; 3],
     pub texture_coords: [Vec2; 3],
-    pub avg_depth: f32,
     pub shading_mode: ShadingMode,
     pub texture_mode: TextureMode,
 }
@@ -35,7 +34,6 @@ impl Triangle {
         color: u32,
         vertex_colors: [u32; 3],
         texture_coords: [Vec2; 3],
-        avg_depth: f32,
         shading_mode: ShadingMode,
         texture_mode: TextureMode,
     ) -> Self {
@@ -44,7 +42,6 @@ impl Triangle {
             color,
             vertex_colors,
             texture_coords,
-            avg_depth,
             shading_mode,
             texture_mode,
         }

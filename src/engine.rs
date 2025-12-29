@@ -5,6 +5,7 @@
 //! rasterization.
 
 use crate::camera::FpsCamera;
+use crate::clipping::{ClipPolygon, ClipVertex, Frustum};
 use crate::colors;
 use crate::light::DirectionalLight;
 use crate::mesh::{LoadError, Mesh};
@@ -86,6 +87,10 @@ pub struct Engine {
     texture_mode: TextureMode,
     shading_mode: ShadingMode,
     light: DirectionalLight,
+    frustum: Frustum,
+    fov: f32,
+    z_near: f32,
+    z_far: f32,
     pub backface_culling: bool,
     pub draw_grid: bool,
 }
@@ -94,7 +99,9 @@ impl Engine {
     pub fn new(width: u32, height: u32) -> Self {
         let fov: f32 = 45.0;
         let aspect_ratio = width as f32 / height as f32;
-        let projection_matrix = Mat4::perspective_lh(fov.to_radians(), aspect_ratio, 0.1, 100.0);
+        let z_near = 0.1;
+        let z_far = 100.0;
+        let projection_matrix = Mat4::perspective_lh(fov.to_radians(), aspect_ratio, z_near, z_far);
 
         Self {
             renderer: Renderer::new(width, height),
@@ -109,6 +116,10 @@ impl Engine {
             shading_mode: ShadingMode::default(),
             light: DirectionalLight::new(Vec3::new(0.0, 0.0, 1.0)),
             backface_culling: true,
+            frustum: Frustum::new(fov.to_radians(), aspect_ratio, z_near, z_far),
+            fov,
+            z_near,
+            z_far,
             draw_grid: true,
         }
     }
@@ -144,8 +155,10 @@ impl Engine {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
+        let aspect_ratio = width as f32 / height as f32;
         self.projection_matrix =
-            Mat4::perspective_lh(45.0, width as f32 / height as f32, 0.1, 100.0);
+            Mat4::perspective_lh(self.fov.to_radians(), aspect_ratio, self.z_near, self.z_far);
+        self.frustum = Frustum::new(self.fov.to_radians(), aspect_ratio, self.z_near, self.z_far);
     }
 
     pub fn camera(&self) -> &FpsCamera {
@@ -216,7 +229,6 @@ impl Engine {
         let buffer_height = self.renderer.height();
         let camera_position = self.camera.position();
         let view_matrix = self.camera.view_matrix();
-        let view_projection = self.projection_matrix * view_matrix;
         let backface_culling = self.backface_culling;
         let shading_mode = self.shading_mode;
 
@@ -274,6 +286,13 @@ impl Engine {
                 }
             }
 
+            // Transform to view (camera) space
+            let view_space_positions = [
+                view_matrix * transformed_positions[0],
+                view_matrix * transformed_positions[1],
+                view_matrix * transformed_positions[2],
+            ];
+
             // Calculate colors based on shading mode
             // Use white for textured modulate mode so lighting doesn't darken the texture
             let base_color = if self.texture_mode == TextureMode::Modulate {
@@ -309,49 +328,79 @@ impl Engine {
                 }
             };
 
-            // Projected vertices will store screen space coordinates where (x, y) represents the pixel coordinates and z represents the original depth value in world space.
-            let mut projected_vertices = Vec::new();
-            for vertex in &transformed_positions {
-                // Transform to clip space: view_projection = projection * view
-                let clip_space_vertex =
-                    view_projection * Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
+            // ==================== FRUSTUM CLIPPING IN VIEW SPACE ====================
+            // Create ClipVertex instances with all attributes for interpolation
+            let clip_vertices = [
+                ClipVertex::new(view_space_positions[0], face_texcoords[0], vertex_colors[0]),
+                ClipVertex::new(view_space_positions[1], face_texcoords[1], vertex_colors[1]),
+                ClipVertex::new(view_space_positions[2], face_texcoords[2], vertex_colors[2]),
+            ];
 
-                // w <= 0 means vertex is behind or on the near plane.
-                if clip_space_vertex.w <= 0.0 {
-                    continue;
-                }
+            // Create polygon and clip against all frustum planes
+            let polygon =
+                ClipPolygon::from_triangle(clip_vertices[0], clip_vertices[1], clip_vertices[2]);
+            let clipped_polygon = self.frustum.clip_polygon(polygon);
 
-                // NDC coordinates should now be normalized to the range [-1, 1]
-                let ndc_vertex = Vec3::new(
-                    clip_space_vertex.x / clip_space_vertex.w,
-                    clip_space_vertex.y / clip_space_vertex.w,
-                    clip_space_vertex.z / clip_space_vertex.w,
-                );
-
-                let screen_x = (ndc_vertex.x + 1.0) * 0.5 * buffer_width as f32;
-                let screen_y = (1.0 - ndc_vertex.y) * 0.5 * buffer_height as f32;
-                projected_vertices.push(Vec3::new(screen_x, screen_y, clip_space_vertex.w));
+            // Skip if polygon was completely clipped away
+            if clipped_polygon.is_empty() {
+                continue;
             }
 
-            if projected_vertices.len() == 3 {
-                let avg_depth = (transformed_positions[0].z
-                    + transformed_positions[1].z
-                    + transformed_positions[2].z)
-                    / 3.0;
+            // Triangulate the clipped polygon and project each resulting triangle
+            for (v0, v1, v2) in clipped_polygon.triangulate() {
+                let clipped_view_positions = [v0.position, v1.position, v2.position];
+                let clipped_texcoords = [v0.texcoord, v1.texcoord, v2.texcoord];
+                let clipped_colors = [v0.color, v1.color, v2.color];
 
-                triangles.push(Triangle::new(
-                    [
-                        projected_vertices[0],
-                        projected_vertices[1],
-                        projected_vertices[2],
-                    ],
-                    flat_color,
-                    vertex_colors,
-                    face_texcoords,
-                    avg_depth,
-                    shading_mode,
-                    self.texture_mode,
-                ));
+                // Project clipped vertices to screen space
+                let mut projected_vertices = Vec::new();
+                let mut all_valid = true;
+
+                for view_pos in &clipped_view_positions {
+                    // Transform from view space to clip space (only need projection now)
+                    let clip_space_vertex =
+                        self.projection_matrix * Vec4::new(view_pos.x, view_pos.y, view_pos.z, 1.0);
+
+                    // w <= 0 means vertex is behind or on the near plane
+                    // This shouldn't happen after proper near-plane clipping, but check anyway
+                    if clip_space_vertex.w <= 0.0 {
+                        all_valid = false;
+                        break;
+                    }
+
+                    // NDC coordinates normalized to [-1, 1]
+                    let ndc_vertex = Vec3::new(
+                        clip_space_vertex.x / clip_space_vertex.w,
+                        clip_space_vertex.y / clip_space_vertex.w,
+                        clip_space_vertex.z / clip_space_vertex.w,
+                    );
+
+                    let screen_x = (ndc_vertex.x + 1.0) * 0.5 * buffer_width as f32;
+                    let screen_y = (1.0 - ndc_vertex.y) * 0.5 * buffer_height as f32;
+                    projected_vertices.push(Vec3::new(screen_x, screen_y, clip_space_vertex.w));
+                }
+
+                if all_valid && projected_vertices.len() == 3 {
+                    // Use flat_color for flat shading, interpolated colors for Gouraud
+                    let tri_color = if shading_mode == ShadingMode::Gouraud {
+                        clipped_colors[0] // Use first vertex color as representative
+                    } else {
+                        flat_color
+                    };
+
+                    triangles.push(Triangle::new(
+                        [
+                            projected_vertices[0],
+                            projected_vertices[1],
+                            projected_vertices[2],
+                        ],
+                        tri_color,
+                        clipped_colors,
+                        clipped_texcoords,
+                        shading_mode,
+                        self.texture_mode,
+                    ));
+                }
             }
         }
 
