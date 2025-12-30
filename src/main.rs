@@ -17,9 +17,9 @@ fn format_window_title(fps: f64, engine: &Engine, mouse_captured: bool) -> Strin
         engine.shading_mode(),
         engine.texture_mode(),
         if mouse_captured {
-            "WASD to move, mouse to look, M to release"
+            "WASD to move, mouse to look, RMB to release"
         } else {
-            "M to capture mouse"
+            "RMB to capture mouse"
         }
     )
 }
@@ -55,6 +55,7 @@ fn main() -> Result<(), String> {
                 window.resize(w, h)?;
                 engine.resize(w, h);
             }
+            WindowEvent::RightMouseDown => window.toggle_mouse_capture(),
             WindowEvent::KeyPress(key) => match key {
                 Key::Num1 => engine.set_render_mode(RenderMode::Wireframe),
                 Key::Num2 => engine.set_render_mode(RenderMode::WireframeVertices),
@@ -63,7 +64,6 @@ fn main() -> Result<(), String> {
                 Key::Num5 => engine.set_render_mode(RenderMode::Filled),
                 Key::C => engine.backface_culling = !engine.backface_culling,
                 Key::G => engine.draw_grid = !engine.draw_grid,
-                Key::M => window.toggle_mouse_capture(),
                 Key::R => {
                     let next = match engine.rasterizer() {
                         RasterizerType::Scanline => RasterizerType::EdgeFunction,

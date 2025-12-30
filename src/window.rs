@@ -41,6 +41,7 @@ pub enum WindowEvent {
     Quit,
     Resize(u32, u32),
     KeyPress(Key),
+    RightMouseDown,
 }
 
 /// Keys that trigger discrete events.
@@ -56,7 +57,6 @@ pub enum Key {
     Num5,
     C,
     G,
-    M,
     R,
     F,
     T,
@@ -314,6 +314,16 @@ impl Window {
                     }
                 }
 
+                // Right mouse button - toggle mouse capture
+                Event::MouseButtonDown {
+                    mouse_btn: sdl2::mouse::MouseButton::Right,
+                    ..
+                } => {
+                    if result == WindowEvent::None {
+                        result = WindowEvent::RightMouseDown;
+                    }
+                }
+
                 _ => {}
             }
         }
@@ -350,7 +360,6 @@ impl Window {
             Keycode::Num5 => Some(Key::Num5),
             Keycode::C => Some(Key::C),
             Keycode::G => Some(Key::G),
-            Keycode::M => Some(Key::M),
             Keycode::R => Some(Key::R),
             Keycode::F => Some(Key::F),
             Keycode::T => Some(Key::T),
