@@ -19,6 +19,7 @@ pub mod colors;
 pub mod engine;
 pub mod light;
 pub mod math;
+pub mod projection;
 pub mod texture;
 pub mod window;
 
@@ -30,6 +31,7 @@ pub(crate) mod render;
 // Re-export commonly needed types at crate root for convenience
 pub use engine::{Engine, RasterizerType, RenderMode, ShadingMode};
 pub use mesh::{LoadError, Mesh};
+pub use projection::Projection;
 
 /// Prelude module for convenient imports.
 ///
@@ -43,6 +45,9 @@ pub mod prelude {
 
     // Engine
     pub use crate::engine::{Engine, RenderMode, ShadingMode, TextureMode};
+
+    // Projection
+    pub use crate::projection::Projection;
 
     // Math
     pub use crate::math::mat4::Mat4;

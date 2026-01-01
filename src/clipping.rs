@@ -1,10 +1,33 @@
+//! View-space frustum clipping.
+//!
+//! This module provides clipping against the view-space frustum using the
+//! Sutherland-Hodgman algorithm. Planes are defined by point + normal pairs.
+//!
+//! For clip-space clipping (against the homogeneous cube), see the
+//! `clip_space` module (when implemented).
+
 use crate::colors;
 use crate::prelude::{Vec2, Vec3};
 
-type Point = Vec3;
-type Normal = Vec3;
+/// A plane defined by a point on the plane and its normal vector.
+/// The normal points toward the "inside" (visible) half-space.
+#[derive(Clone, Copy)]
+pub struct Plane {
+    pub point: Vec3,
+    pub normal: Vec3,
+}
 
-pub type Plane = (Point, Normal);
+impl Plane {
+    pub fn new(point: Vec3, normal: Vec3) -> Self {
+        Self { point, normal }
+    }
+
+    /// Returns the signed distance from a point to this plane.
+    /// Positive = inside (same side as normal), Negative = outside.
+    pub fn signed_distance(&self, position: Vec3) -> f32 {
+        (position - self.point).dot(self.normal)
+    }
+}
 
 /// A vertex with all attributes needed for clipping interpolation.
 /// This is an intermediate representation used during the clipping process.
@@ -42,18 +65,11 @@ impl ClipVertex {
             color,
         }
     }
-
-    /// Returns the signed distance from this vertex to a plane.
-    /// Positive = inside (same side as normal), Negative = outside.
-    fn signed_distance(&self, plane: Plane) -> f32 {
-        let (plane_point, plane_normal) = plane;
-        (self.position - plane_point).dot(plane_normal)
-    }
 }
 
 /// A polygon represented as a list of vertices.
 /// Used as an intermediate representation during clipping.
-/// After clipping against all frustum planes, this is triangulated back
+/// After clipping against all planes, this is triangulated back
 /// into triangles for rasterization.
 pub(crate) struct ClipPolygon {
     pub vertices: Vec<ClipVertex>,
@@ -74,8 +90,8 @@ impl ClipPolygon {
 
     /// Clip this polygon against a single plane using the Sutherland-Hodgman algorithm.
     /// Returns a new polygon with the clipped vertices.
-    pub fn clip_against_plane(&self, plane: Plane) -> Self {
-        if self.vertices.is_empty() || self.vertices.len() < 3 {
+    pub fn clip_against_plane(&self, plane: &Plane) -> Self {
+        if self.vertices.len() < 3 {
             return Self { vertices: vec![] };
         }
 
@@ -85,8 +101,8 @@ impl ClipPolygon {
             let current = &self.vertices[i];
             let next = &self.vertices[(i + 1) % self.vertices.len()];
 
-            let d1 = current.signed_distance(plane);
-            let d2 = next.signed_distance(plane);
+            let d1 = plane.signed_distance(current.position);
+            let d2 = plane.signed_distance(next.position);
 
             let current_inside = d1 >= 0.0;
             let next_inside = d2 >= 0.0;
@@ -120,79 +136,54 @@ impl ClipPolygon {
     }
 }
 
-pub enum ClippingPlane {
-    Left(Plane),
-    Right(Plane),
-    Top(Plane),
-    Bottom(Plane),
-    Near(Plane),
-    Far(Plane),
+/// View-space frustum defined by 6 clipping planes.
+///
+/// The planes are constructed from the projection parameters (FOV, near/far)
+/// and positioned in view/camera space. Use this to clip geometry before
+/// projection to avoid issues with vertices behind the camera.
+pub struct ViewFrustum {
+    planes: [Plane; 6],
 }
 
-impl ClippingPlane {
-    /// Extract the plane (point, normal) from this clipping plane.
-    pub fn plane(&self) -> Plane {
-        match self {
-            ClippingPlane::Left(p)
-            | ClippingPlane::Right(p)
-            | ClippingPlane::Top(p)
-            | ClippingPlane::Bottom(p)
-            | ClippingPlane::Near(p)
-            | ClippingPlane::Far(p) => *p,
-        }
-    }
+impl ViewFrustum {
+    /// Creates a new view frustum from projection parameters.
+    ///
+    /// # Arguments
+    /// * `fov_x` - Horizontal field of view in radians
+    /// * `fov_y` - Vertical field of view in radians
+    /// * `z_near` - Near clipping plane distance
+    /// * `z_far` - Far clipping plane distance
+    pub fn new(fov_x: f32, fov_y: f32, z_near: f32, z_far: f32) -> Self {
+        let half_fov_x = fov_x / 2.0;
+        let half_fov_y = fov_y / 2.0;
+        let origin = Vec3::ZERO;
 
-    fn new_frustum_left(fov_x: f32) -> Self {
-        let half_fov = fov_x / 2.0;
-        let normal = Vec3::new(half_fov.cos(), 0.0, half_fov.sin());
-        ClippingPlane::Left((Vec3::new(0.0, 0.0, 0.0), normal))
-    }
-
-    fn new_frustum_right(fov_x: f32) -> Self {
-        let half_fov = fov_x / 2.0;
-        let normal = Vec3::new(-half_fov.cos(), 0.0, half_fov.sin());
-        ClippingPlane::Right((Vec3::new(0.0, 0.0, 0.0), normal))
-    }
-
-    fn new_frustum_top(fov_y: f32) -> Self {
-        let half_fov = fov_y / 2.0;
-        let normal = Vec3::new(0.0, -half_fov.cos(), half_fov.sin());
-        ClippingPlane::Top((Vec3::new(0.0, 0.0, 0.0), normal))
-    }
-
-    fn new_frustum_bottom(fov_y: f32) -> Self {
-        let half_fov = fov_y / 2.0;
-        let normal = Vec3::new(0.0, half_fov.cos(), half_fov.sin());
-        ClippingPlane::Bottom((Vec3::new(0.0, 0.0, 0.0), normal))
-    }
-
-    fn new_frustum_near(znear: f32) -> Self {
-        let point = Vec3::new(0.0, 0.0, znear);
-        let normal = Vec3::new(0.0, 0.0, 1.0);
-        ClippingPlane::Near((point, normal))
-    }
-
-    fn new_frustum_far(zfar: f32) -> Self {
-        let point = Vec3::new(0.0, 0.0, zfar);
-        let normal = Vec3::new(0.0, 0.0, -1.0);
-        ClippingPlane::Far((point, normal))
-    }
-}
-
-pub struct Frustum {
-    pub planes: [ClippingPlane; 6],
-}
-
-impl Frustum {
-    pub fn new(fov_x: f32, fov_y: f32, znear: f32, zfar: f32) -> Self {
         Self {
             planes: [
-                ClippingPlane::new_frustum_left(fov_x),
-                ClippingPlane::new_frustum_right(fov_x),
-                ClippingPlane::new_frustum_top(fov_y),
-                ClippingPlane::new_frustum_bottom(fov_y),
-                ClippingPlane::new_frustum_near(znear),
-                ClippingPlane::new_frustum_far(zfar),
+                // Left plane: normal points right-ish, into the frustum
+                Plane::new(
+                    origin,
+                    Vec3::new(half_fov_x.cos(), 0.0, half_fov_x.sin()),
+                ),
+                // Right plane: normal points left-ish, into the frustum
+                Plane::new(
+                    origin,
+                    Vec3::new(-half_fov_x.cos(), 0.0, half_fov_x.sin()),
+                ),
+                // Top plane: normal points down-ish, into the frustum
+                Plane::new(
+                    origin,
+                    Vec3::new(0.0, -half_fov_y.cos(), half_fov_y.sin()),
+                ),
+                // Bottom plane: normal points up-ish, into the frustum
+                Plane::new(
+                    origin,
+                    Vec3::new(0.0, half_fov_y.cos(), half_fov_y.sin()),
+                ),
+                // Near plane: normal points forward (+Z)
+                Plane::new(Vec3::new(0.0, 0.0, z_near), Vec3::new(0.0, 0.0, 1.0)),
+                // Far plane: normal points backward (-Z)
+                Plane::new(Vec3::new(0.0, 0.0, z_far), Vec3::new(0.0, 0.0, -1.0)),
             ],
         }
     }
@@ -202,11 +193,11 @@ impl Frustum {
     pub(crate) fn clip_polygon(&self, polygon: ClipPolygon) -> ClipPolygon {
         let mut result = polygon;
 
-        for clipping_plane in &self.planes {
+        for plane in &self.planes {
             if result.is_empty() {
                 break;
             }
-            result = result.clip_against_plane(clipping_plane.plane());
+            result = result.clip_against_plane(plane);
         }
 
         result

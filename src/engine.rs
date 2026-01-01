@@ -5,11 +5,12 @@
 //! rasterization.
 
 use crate::camera::FpsCamera;
-use crate::clipping::{ClipPolygon, ClipVertex, Frustum};
+use crate::clipping::{ClipPolygon, ClipVertex, ViewFrustum};
 use crate::colors;
 use crate::light::DirectionalLight;
 use crate::mesh::{LoadError, Mesh, Texel, Vertex};
 use crate::prelude::{Mat4, Vec3, Vec4};
+use crate::projection::Projection;
 use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
 
 pub use crate::render::RasterizerType;
@@ -81,30 +82,22 @@ pub struct Engine {
     triangles_to_render: Vec<Triangle>,
     mesh: Mesh,
     camera: FpsCamera,
+    projection: Projection,
     projection_matrix: Mat4,
+    view_frustum: ViewFrustum,
     render_mode: RenderMode,
     texture: Option<Texture>,
     texture_mode: TextureMode,
     shading_mode: ShadingMode,
     light: DirectionalLight,
-    frustum: Frustum,
-    fov_x: f32,
-    fov_y: f32,
-    z_near: f32,
-    z_far: f32,
     pub backface_culling: bool,
     pub draw_grid: bool,
 }
 
 impl Engine {
     pub fn new(width: u32, height: u32) -> Self {
-        let fov_y: f32 = 45.0;
-        let aspect_ratio_x = width as f32 / height as f32;
-        let fov_x = (2.0 * (aspect_ratio_x * (fov_y.to_radians() / 2.0).tan()).atan()).to_degrees();
-        let z_near = 0.1;
-        let z_far = 100.0;
-        let projection_matrix =
-            Mat4::perspective_lh(fov_y.to_radians(), aspect_ratio_x, z_near, z_far);
+        let aspect_ratio = width as f32 / height as f32;
+        let projection = Projection::from_degrees(45.0, aspect_ratio, 0.1, 100.0);
 
         Self {
             renderer: Renderer::new(width, height),
@@ -112,18 +105,15 @@ impl Engine {
             triangles_to_render: Vec::new(),
             mesh: Mesh::new(vec![], vec![], Vec3::ZERO, Vec3::ONE, Vec3::ZERO),
             camera: FpsCamera::new(Vec3::new(0.0, 0.0, -5.0)),
-            projection_matrix,
+            projection_matrix: projection.matrix(),
+            view_frustum: projection.view_frustum(),
+            projection,
             texture: None,
             texture_mode: TextureMode::default(),
             render_mode: RenderMode::default(),
             shading_mode: ShadingMode::default(),
             light: DirectionalLight::new(Vec3::new(0.0, 0.0, 1.0)),
             backface_culling: true,
-            frustum: Frustum::new(fov_x.to_radians(), fov_y.to_radians(), z_near, z_far),
-            fov_x,
-            fov_y,
-            z_near,
-            z_far,
             draw_grid: true,
         }
     }
@@ -160,20 +150,9 @@ impl Engine {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
         let aspect_ratio = width as f32 / height as f32;
-        self.fov_x =
-            (2.0 * (aspect_ratio * (self.fov_y.to_radians() / 2.0).tan()).atan()).to_degrees();
-        self.projection_matrix = Mat4::perspective_lh(
-            self.fov_y.to_radians(),
-            aspect_ratio,
-            self.z_near,
-            self.z_far,
-        );
-        self.frustum = Frustum::new(
-            self.fov_x.to_radians(),
-            self.fov_y.to_radians(),
-            self.z_near,
-            self.z_far,
-        );
+        self.projection.set_aspect_ratio(aspect_ratio);
+        self.projection_matrix = self.projection.matrix();
+        self.view_frustum = self.projection.view_frustum();
     }
 
     pub fn camera(&self) -> &FpsCamera {
@@ -355,7 +334,7 @@ impl Engine {
             // Create polygon and clip against all frustum planes
             let polygon =
                 ClipPolygon::from_triangle(clip_vertices[0], clip_vertices[1], clip_vertices[2]);
-            let clipped_polygon = self.frustum.clip_polygon(polygon);
+            let clipped_polygon = self.view_frustum.clip_polygon(polygon);
 
             // Skip if polygon was completely clipped away
             if clipped_polygon.is_empty() {
