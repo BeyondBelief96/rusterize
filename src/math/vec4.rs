@@ -70,6 +70,16 @@ impl Vec4 {
             self.w * scalar,
         )
     }
+
+    /// Linearly interpolate between two vectors.
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        Self::new(
+            self.x + (other.x - self.x) * t,
+            self.y + (other.y - self.y) * t,
+            self.z + (other.z - self.z) * t,
+            self.w + (other.w - self.w) * t,
+        )
+    }
 }
 
 impl Add<Vec4> for Vec4 {

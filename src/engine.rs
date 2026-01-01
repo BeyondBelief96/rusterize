@@ -5,7 +5,7 @@
 //! rasterization.
 
 use crate::camera::FpsCamera;
-use crate::clipping::{ClipPolygon, ClipVertex, ViewFrustum};
+use crate::clipper::{ClipSpaceClipper, ClipSpacePolygon, ClipSpaceVertex};
 use crate::colors;
 use crate::light::DirectionalLight;
 use crate::mesh::{LoadError, Mesh, Texel, Vertex};
@@ -84,7 +84,7 @@ pub struct Engine {
     camera: FpsCamera,
     projection: Projection,
     projection_matrix: Mat4,
-    view_frustum: ViewFrustum,
+    clipper: ClipSpaceClipper,
     render_mode: RenderMode,
     texture: Option<Texture>,
     texture_mode: TextureMode,
@@ -106,7 +106,7 @@ impl Engine {
             mesh: Mesh::new(vec![], vec![], Vec3::ZERO, Vec3::ONE, Vec3::ZERO),
             camera: FpsCamera::new(Vec3::new(0.0, 0.0, -5.0)),
             projection_matrix: projection.matrix(),
-            view_frustum: projection.view_frustum(),
+            clipper: ClipSpaceClipper::new(),
             projection,
             texture: None,
             texture_mode: TextureMode::default(),
@@ -152,7 +152,7 @@ impl Engine {
         let aspect_ratio = width as f32 / height as f32;
         self.projection.set_aspect_ratio(aspect_ratio);
         self.projection_matrix = self.projection.matrix();
-        self.view_frustum = self.projection.view_frustum();
+        // Note: ClipSpaceClipper doesn't need rebuilding - it uses fixed planes
     }
 
     pub fn camera(&self) -> &FpsCamera {
@@ -322,60 +322,66 @@ impl Engine {
                 }
             };
 
-            // ==================== FRUSTUM CLIPPING IN VIEW SPACE ====================
-            // Create ClipVertex instances with all attributes for interpolation
-            // This consists of the vertex positions in view space, the texture coordinates, and the vertex colors (when rendering no texture)
-            let clip_vertices = [
-                ClipVertex::new(view_space_positions[0], face_texcoords[0], vertex_colors[0]),
-                ClipVertex::new(view_space_positions[1], face_texcoords[1], vertex_colors[1]),
-                ClipVertex::new(view_space_positions[2], face_texcoords[2], vertex_colors[2]),
+            // ==================== PROJECT TO CLIP SPACE ====================
+            // Transform from view space to clip space (homogeneous coordinates)
+            let clip_space_positions = [
+                self.projection_matrix * Vec4::from_vec3(view_space_positions[0], 1.0),
+                self.projection_matrix * Vec4::from_vec3(view_space_positions[1], 1.0),
+                self.projection_matrix * Vec4::from_vec3(view_space_positions[2], 1.0),
             ];
 
-            // Create polygon and clip against all frustum planes
-            let polygon =
-                ClipPolygon::from_triangle(clip_vertices[0], clip_vertices[1], clip_vertices[2]);
-            let clipped_polygon = self.view_frustum.clip_polygon(polygon);
+            // ==================== CLIP IN CLIP SPACE ====================
+            // Create ClipSpaceVertex instances with homogeneous positions
+            let clip_vertices = [
+                ClipSpaceVertex::new(clip_space_positions[0], face_texcoords[0], vertex_colors[0]),
+                ClipSpaceVertex::new(clip_space_positions[1], face_texcoords[1], vertex_colors[1]),
+                ClipSpaceVertex::new(clip_space_positions[2], face_texcoords[2], vertex_colors[2]),
+            ];
+
+            // Clip against the canonical clip cube: -w <= x,y,z <= w
+            let polygon = ClipSpacePolygon::from_triangle(
+                clip_vertices[0],
+                clip_vertices[1],
+                clip_vertices[2],
+            );
+            let clipped_polygon = self.clipper.clip_polygon(polygon);
 
             // Skip if polygon was completely clipped away
             if clipped_polygon.is_empty() {
                 continue;
             }
 
-            // Triangulate the clipped polygon and project each resulting triangle
+            // ==================== PERSPECTIVE DIVIDE & VIEWPORT TRANSFORM ====================
+            // Triangulate the clipped polygon and transform to screen space
             for (v0, v1, v2) in clipped_polygon.triangulate() {
-                let clipped_view_positions = [v0.position, v1.position, v2.position];
+                let clipped_positions = [v0.position, v1.position, v2.position];
                 let clipped_texcoords = [v0.texcoord, v1.texcoord, v2.texcoord];
                 let clipped_colors = [v0.color, v1.color, v2.color];
 
-                // Project clipped vertices to screen space
-                let mut projected_vertices = Vec::new();
+                let mut screen_vertices = [Vec3::ZERO; 3];
                 let mut all_valid = true;
 
-                for view_pos in &clipped_view_positions {
-                    // Transform from view space to clip space (only need projection now)
-                    let clip_space_vertex =
-                        self.projection_matrix * Vec4::new(view_pos.x, view_pos.y, view_pos.z, 1.0);
-
-                    // w <= 0 means vertex is behind or on the near plane
-                    // This shouldn't happen after proper near-plane clipping, but check anyway
-                    if clip_space_vertex.w <= 0.0 {
+                for (i, clip_pos) in clipped_positions.iter().enumerate() {
+                    // After clipping, w should always be positive
+                    // but check anyway for safety
+                    if clip_pos.w <= 0.0 {
                         all_valid = false;
                         break;
                     }
 
-                    // NDC coordinates normalized to [-1, 1]
-                    let ndc_vertex = Vec3::new(
-                        clip_space_vertex.x / clip_space_vertex.w,
-                        clip_space_vertex.y / clip_space_vertex.w,
-                        clip_space_vertex.z / clip_space_vertex.w,
-                    );
+                    // Perspective divide: clip space -> NDC [-1, 1]
+                    let ndc_x = clip_pos.x / clip_pos.w;
+                    let ndc_y = clip_pos.y / clip_pos.w;
 
-                    let screen_x = (ndc_vertex.x + 1.0) * 0.5 * buffer_width as f32;
-                    let screen_y = (1.0 - ndc_vertex.y) * 0.5 * buffer_height as f32;
-                    projected_vertices.push(Vec3::new(screen_x, screen_y, clip_space_vertex.w));
+                    // Viewport transform: NDC -> screen coordinates
+                    let screen_x = (ndc_x + 1.0) * 0.5 * buffer_width as f32;
+                    let screen_y = (1.0 - ndc_y) * 0.5 * buffer_height as f32;
+
+                    // Store w for depth buffer (1/w) and perspective-correct interpolation
+                    screen_vertices[i] = Vec3::new(screen_x, screen_y, clip_pos.w);
                 }
 
-                if all_valid && projected_vertices.len() == 3 {
+                if all_valid {
                     // Use flat_color for flat shading, interpolated colors for Gouraud
                     let tri_color = if shading_mode == ShadingMode::Gouraud {
                         clipped_colors[0] // Use first vertex color as representative
@@ -384,11 +390,7 @@ impl Engine {
                     };
 
                     triangles.push(Triangle::new(
-                        [
-                            projected_vertices[0],
-                            projected_vertices[1],
-                            projected_vertices[2],
-                        ],
+                        screen_vertices,
                         tri_color,
                         clipped_colors,
                         clipped_texcoords,

@@ -24,7 +24,7 @@ pub mod texture;
 pub mod window;
 
 // Internal modules - used within the crate only
-pub(crate) mod clipping;
+pub(crate) mod clipper;
 pub(crate) mod mesh;
 pub(crate) mod render;
 

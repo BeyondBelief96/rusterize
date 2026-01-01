@@ -2,15 +2,15 @@
 //!
 //! The [`Projection`] struct is the single source of truth for all perspective
 //! projection parameters (FOV, aspect ratio, near/far planes). It can generate
-//! the projection matrix and view-space frustum planes for clipping.
+//! the projection matrix.
 
-use crate::clipping::ViewFrustum;
+use crate::clipper::view_space::ViewFrustum;
 use crate::math::mat4::Mat4;
 
 /// Perspective projection parameters.
 ///
 /// Stores the canonical projection parameters and provides methods to derive
-/// the projection matrix and view-space frustum for clipping.
+/// the projection matrix.
 #[derive(Debug, Clone, Copy)]
 pub struct Projection {
     /// Vertical field of view in radians.
@@ -86,6 +86,10 @@ impl Projection {
     ///
     /// The frustum planes are positioned in view/camera space and can be used
     /// to clip geometry before projection.
+    ///
+    /// Note: This method is kept for reference. The engine now uses clip-space
+    /// clipping which doesn't require rebuilding planes on projection changes.
+    #[allow(dead_code)]
     pub fn view_frustum(&self) -> ViewFrustum {
         ViewFrustum::new(self.fov_x(), self.fov_y, self.z_near, self.z_far)
     }

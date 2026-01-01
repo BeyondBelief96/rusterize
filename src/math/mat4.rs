@@ -95,10 +95,17 @@ impl Mat4 {
     }
 
     /// Creates a perspective matrix with left-handed coordinate system.
+    ///
+    /// Maps view-space z to clip-space z with [-1, 1] NDC depth range:
+    /// - z = near → z_ndc = -1
+    /// - z = far → z_ndc = +1
+    ///
+    /// The w component receives the original z value for perspective division.
     pub fn perspective_lh(fov: f32, aspect_ratio: f32, near: f32, far: f32) -> Self {
         let t = near * (fov / 2.0).tan();
         let r = t * aspect_ratio;
-        let a = (far + near) / (near - far);
+        // For left-handed [-1, 1] depth: a = (f+n)/(f-n), b = -2fn/(f-n)
+        let a = (far + near) / (far - near);
         let b = -2.0 * far * near / (far - near);
         Mat4::new([
             [near / r, 0.0, 0.0, 0.0],
