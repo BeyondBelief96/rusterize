@@ -30,12 +30,12 @@ fn main() -> Result<(), String> {
 
     // Load the crab model
     engine
-        .add_model("crab", "assets/roadbike/roadbike.obj")
+        .add_model("f22", "assets/f22.obj")
         .map_err(|e| e.to_string())?;
 
     // Set texture on the model
-    // let texture = Texture::from_file("assets/crab.png").map_err(|e| e.to_string())?;
-    // engine.model_mut("crab").unwrap().set_texture(texture);
+    let texture = Texture::from_file("assets/f22.png").map_err(|e| e.to_string())?;
+    engine.model_mut("f22").unwrap().set_texture(texture);
 
     // Start with texture mode enabled so we can see it
     engine.set_texture_mode(TextureMode::Replace);
