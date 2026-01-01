@@ -21,6 +21,9 @@ cargo test test_name
 
 # Check for compilation errors without building
 cargo check
+
+# Run benchmarks
+LIBRARY_PATH="/opt/homebrew/opt/sdl2/lib:$LIBRARY_PATH" cargo bench
 ```
 
 ### Windows
@@ -53,6 +56,7 @@ cargo check
   - Windows: Download from https://github.com/libsdl-org/SDL/releases (see build instructions above)
   - The `sdl2` Rust crate (v0.38.0) provides bindings.
 - **tobj**: OBJ file loader for mesh import.
+- **image**: Texture loading from image files (PNG, JPG, etc.).
 - **approx**: Floating-point comparison utilities.
 
 ## Architecture
@@ -82,12 +86,17 @@ This affects:
    - Perspective projection using left-handed perspective matrix
    - Clip-space W stored in vertex z component for depth testing
 
-3. **Rasterization** (`rasterizer/`): Two algorithms available:
+3. **Clipping** (`clipper/`): Sutherland-Hodgman polygon clipping:
+   - **Clip-space** (`clip_space.rs`): Clips against canonical cube (-w ≤ x,y,z ≤ w) before perspective divide
+   - **View-space** (`view_space.rs`): Alternative reference implementation
+   - Handles triangles extending outside frustum; may produce 1-4 triangles per input
+
+4. **Rasterization** (`rasterizer/`): Two algorithms available:
    - **Scanline** (`scanline.rs`): Flat-top/flat-bottom triangle decomposition
    - **Edge Function** (`edgefunction.rs`): Bounding box iteration with edge function tests (GPU-style)
    - Both use per-pixel depth testing via z-buffer
 
-4. **Display** (`window.rs`): FrameBuffer bytes are uploaded to an SDL streaming texture (ARGB8888) and copied to canvas.
+5. **Display** (`window.rs`): FrameBuffer bytes are uploaded to an SDL streaming texture (ARGB8888) and copied to canvas.
 
 ### Shading Modes
 
@@ -123,8 +132,8 @@ Hidden surface removal uses a per-pixel depth buffer (`framebuffer.rs`, `rendere
 
 ### Module Visibility
 
-- **Public API** (`lib.rs`): `engine`, `math`, `window` modules
-- **Internal** (`pub(crate)`): `framebuffer`, `mesh`, `rasterizer`, `renderer`
+- **Public API** (`lib.rs`): `camera`, `colors`, `engine`, `light`, `math`, `projection`, `texture`, `window`
+- **Internal** (`pub(crate)`): `clipper`, `mesh`, `render` (contains `framebuffer`, `rasterizer`, `renderer`)
 
 ### Key Types
 

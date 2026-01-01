@@ -28,12 +28,14 @@ fn main() -> Result<(), String> {
     let mut window = Window::new("Russsty", WINDOW_WIDTH, WINDOW_HEIGHT)?;
     let mut engine = Engine::new(window.width(), window.height());
 
+    // Load the crab model
     engine
-        .load_mesh("assets/crab.obj")
+        .add_model("crab", "assets/roadbike/roadbike.obj")
         .map_err(|e| e.to_string())?;
 
-    let texture = Texture::from_file("assets/crab.png").map_err(|e| e.to_string())?;
-    engine.set_texture(texture);
+    // Set texture on the model
+    // let texture = Texture::from_file("assets/crab.png").map_err(|e| e.to_string())?;
+    // engine.model_mut("crab").unwrap().set_texture(texture);
 
     // Start with texture mode enabled so we can see it
     engine.set_texture_mode(TextureMode::Replace);

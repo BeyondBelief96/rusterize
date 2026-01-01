@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::{math::vec3::Vec3, prelude::Vec2};
+use crate::{math::vec3::Vec3, prelude::Vec2, transform::Transform};
 
 /// Represents a triangle face with indices into the vertex array.
 /// Uses 0-based indexing.
@@ -68,31 +68,30 @@ pub(crate) struct Vertex {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
+    name: String,
     vertices: Vec<Vertex>,
     faces: Vec<Face>,
-    rotation: Vec3,
-    scale: Vec3,
-    translation: Vec3,
+    transform: Transform,
 }
 
 impl Mesh {
-    pub(crate) fn new(
-        vertices: Vec<Vertex>,
-        faces: Vec<Face>,
-        rotation: Vec3,
-        scale: Vec3,
-        translation: Vec3,
-    ) -> Self {
+    pub(crate) fn new(name: String, vertices: Vec<Vertex>, faces: Vec<Face>) -> Self {
         Self {
+            name,
             vertices,
             faces,
-            rotation,
-            scale,
-            translation,
+            transform: Transform::default(),
         }
     }
 
-    pub(crate) fn from_obj(file_path: &str) -> Result<Self, LoadError> {
+    /// Get the mesh name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Load all meshes from an OBJ file.
+    /// Each object/group in the OBJ becomes a separate Mesh.
+    pub(crate) fn load_all_from_obj(file_path: &str) -> Result<Vec<Self>, LoadError> {
         let load_options = tobj::LoadOptions {
             triangulate: true,
             single_index: true,
@@ -101,103 +100,97 @@ impl Mesh {
 
         let (models, _materials) = tobj::load_obj(file_path, &load_options)?;
 
-        let model = models.into_iter().next().ok_or(LoadError::NoModels)?;
-        let mesh = model.mesh;
+        if models.is_empty() {
+            return Err(LoadError::NoModels);
+        }
 
-        if mesh.positions.is_empty() {
+        let mut meshes = Vec::with_capacity(models.len());
+
+        for (index, model) in models.into_iter().enumerate() {
+            let tobj_mesh = model.mesh;
+
+            if tobj_mesh.positions.is_empty() {
+                continue; // Skip empty meshes
+            }
+
+            if tobj_mesh.indices.len() % 3 != 0 {
+                return Err(LoadError::InvalidFaces);
+            }
+
+            // Use the model name from OBJ, or generate a fallback
+            let name = if model.name.is_empty() {
+                format!("mesh_{}", index)
+            } else {
+                model.name
+            };
+
+            // With single_index: true, tobj aligns all vertex attributes by index.
+            // This means vertex i's data is found at:
+            //   - positions[i*3 .. i*3+3]  (x, y, z)
+            //   - normals[i*3 .. i*3+3]    (nx, ny, nz)
+            //   - texcoords[i*2 .. i*2+2]  (u, v)
+            //
+            // The flat arrays look like:
+            //   positions:  [x0, y0, z0, x1, y1, z1, x2, y2, z2, ...]
+            //   normals:    [nx0, ny0, nz0, nx1, ny1, nz1, ...]
+            //   texcoords:  [u0, v0, u1, v1, u2, v2, ...]
+            let has_normals = !tobj_mesh.normals.is_empty();
+            let has_texcoords = !tobj_mesh.texcoords.is_empty();
+            let vertices: Vec<Vertex> = tobj_mesh
+                .positions
+                // chunks_exact(3) yields [x, y, z] slices for each vertex
+                .chunks_exact(3)
+                // enumerate gives (vertex_index, position_slice)
+                .enumerate()
+                .map(|(i, p)| {
+                    // Normals have 3 components, so vertex i starts at i * 3
+                    let normal = if has_normals {
+                        let n = &tobj_mesh.normals[i * 3..i * 3 + 3];
+                        Vec3::new(n[0], n[1], n[2])
+                    } else {
+                        Vec3::ZERO
+                    };
+
+                    // Texcoords have 2 components (u, v), so vertex i starts at i * 2
+                    let texel = if has_texcoords {
+                        let t = &tobj_mesh.texcoords[i * 2..i * 2 + 2];
+                        Vec2::new(t[0], t[1])
+                    } else {
+                        Vec2::ZERO
+                    };
+
+                    Vertex {
+                        position: Vec3::new(p[0], p[1], p[2]),
+                        normal,
+                        texel,
+                    }
+                })
+                .collect();
+
+            let faces: Vec<Face> = tobj_mesh
+                .indices
+                .chunks_exact(3)
+                .map(|c| Face::new(c[0], c[1], c[2]))
+                .collect();
+
+            meshes.push(Self::new(name, vertices, faces));
+        }
+
+        if meshes.is_empty() {
             return Err(LoadError::NoVertices);
         }
 
-        if mesh.indices.len() % 3 != 0 {
-            return Err(LoadError::InvalidFaces);
-        }
-
-        // With single_index: true, tobj aligns all vertex attributes by index.
-        // This means vertex i's data is found at:
-        //   - positions[i*3 .. i*3+3]  (x, y, z)
-        //   - normals[i*3 .. i*3+3]    (nx, ny, nz)
-        //   - texcoords[i*2 .. i*2+2]  (u, v)
-        //
-        // The flat arrays look like:
-        //   positions:  [x0, y0, z0, x1, y1, z1, x2, y2, z2, ...]
-        //   normals:    [nx0, ny0, nz0, nx1, ny1, nz1, ...]
-        //   texcoords:  [u0, v0, u1, v1, u2, v2, ...]
-        let has_normals = !mesh.normals.is_empty();
-        let has_texcoords = !mesh.texcoords.is_empty();
-        let vertices: Vec<Vertex> = mesh
-            .positions
-            // chunks_exact(3) yields [x, y, z] slices for each vertex
-            .chunks_exact(3)
-            // enumerate gives (vertex_index, position_slice)
-            .enumerate()
-            .map(|(i, p)| {
-                // Normals have 3 components, so vertex i starts at i * 3
-                let normal = if has_normals {
-                    let n = &mesh.normals[i * 3..i * 3 + 3];
-                    Vec3::new(n[0], n[1], n[2])
-                } else {
-                    Vec3::ZERO
-                };
-
-                // Texcoords have 2 components (u, v), so vertex i starts at i * 2
-                let texel = if has_texcoords {
-                    let t = &mesh.texcoords[i * 2..i * 2 + 2];
-                    Vec2::new(t[0], t[1])
-                } else {
-                    Vec2::ZERO
-                };
-
-                Vertex {
-                    position: Vec3::new(p[0], p[1], p[2]),
-                    normal,
-                    texel,
-                }
-            })
-            .collect();
-
-        let faces: Vec<Face> = mesh
-            .indices
-            .chunks_exact(3)
-            .map(|c| Face::new(c[0], c[1], c[2]))
-            .collect();
-
-        Ok(Self::new(
-            vertices,
-            faces,
-            Vec3::ZERO,
-            Vec3::ONE,
-            Vec3::ZERO,
-        ))
+        Ok(meshes)
     }
 
-    /// Get the rotation vector
-    pub fn rotation(&self) -> Vec3 {
-        self.rotation
+    /// Get a reference to the transform.
+    pub fn transform(&self) -> &Transform {
+        &self.transform
     }
 
-    /// Get a mutable reference to the rotation vector
-    pub fn rotation_mut(&mut self) -> &mut Vec3 {
-        &mut self.rotation
-    }
-
-    /// Get the scale vector
-    pub fn scale(&self) -> Vec3 {
-        self.scale
-    }
-
-    /// Get a mutable reference to the scale vector
-    pub fn scale_mut(&mut self) -> &mut Vec3 {
-        &mut self.scale
-    }
-
-    /// Get the translation vector
-    pub fn translation(&self) -> Vec3 {
-        self.translation
-    }
-
-    /// Get a mutable reference to the translation vector
-    pub fn translation_mut(&mut self) -> &mut Vec3 {
-        &mut self.translation
+    /// Get a mutable reference to the transform.
+    pub fn transform_mut(&mut self) -> &mut Transform {
+        &mut self.transform
     }
 
     /// Get a reference to the vertices
