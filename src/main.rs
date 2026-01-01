@@ -17,9 +17,9 @@ fn format_window_title(fps: f64, engine: &Engine, mouse_captured: bool) -> Strin
         engine.shading_mode(),
         engine.texture_mode(),
         if mouse_captured {
-            "WASD to move, mouse to look, RMB to release"
+            "WASD to move, mouse to look, M/RMB to release"
         } else {
-            "RMB to capture mouse"
+            "M/RMB to capture mouse"
         }
     )
 }
@@ -87,6 +87,7 @@ fn main() -> Result<(), String> {
                     };
                     engine.set_texture_mode(next);
                 }
+                Key::M => window.toggle_mouse_capture(),
                 _ => {}
             },
             WindowEvent::None => {}

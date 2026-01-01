@@ -56,12 +56,14 @@ impl From<tobj::LoadError> for LoadError {
     }
 }
 
+pub type Texel = Vec2;
+
 /// A vertex with position and normal attributes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Vertex {
     pub position: Vec3,
     pub normal: Vec3,
-    pub texel: Vec2,
+    pub texel: Texel,
 }
 
 #[derive(Clone, Debug, PartialEq)]

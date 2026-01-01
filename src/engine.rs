@@ -8,7 +8,7 @@ use crate::camera::FpsCamera;
 use crate::clipping::{ClipPolygon, ClipVertex, Frustum};
 use crate::colors;
 use crate::light::DirectionalLight;
-use crate::mesh::{LoadError, Mesh};
+use crate::mesh::{LoadError, Mesh, Texel, Vertex};
 use crate::prelude::{Mat4, Vec3, Vec4};
 use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
 
@@ -88,7 +88,8 @@ pub struct Engine {
     shading_mode: ShadingMode,
     light: DirectionalLight,
     frustum: Frustum,
-    fov: f32,
+    fov_x: f32,
+    fov_y: f32,
     z_near: f32,
     z_far: f32,
     pub backface_culling: bool,
@@ -97,11 +98,13 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(width: u32, height: u32) -> Self {
-        let fov: f32 = 45.0;
-        let aspect_ratio = width as f32 / height as f32;
+        let fov_y: f32 = 45.0;
+        let aspect_ratio_x = width as f32 / height as f32;
+        let fov_x = (2.0 * (aspect_ratio_x * (fov_y.to_radians() / 2.0).tan()).atan()).to_degrees();
         let z_near = 0.1;
         let z_far = 100.0;
-        let projection_matrix = Mat4::perspective_lh(fov.to_radians(), aspect_ratio, z_near, z_far);
+        let projection_matrix =
+            Mat4::perspective_lh(fov_y.to_radians(), aspect_ratio_x, z_near, z_far);
 
         Self {
             renderer: Renderer::new(width, height),
@@ -116,8 +119,9 @@ impl Engine {
             shading_mode: ShadingMode::default(),
             light: DirectionalLight::new(Vec3::new(0.0, 0.0, 1.0)),
             backface_culling: true,
-            frustum: Frustum::new(fov.to_radians(), aspect_ratio, z_near, z_far),
-            fov,
+            frustum: Frustum::new(fov_x.to_radians(), fov_y.to_radians(), z_near, z_far),
+            fov_x,
+            fov_y,
             z_near,
             z_far,
             draw_grid: true,
@@ -156,9 +160,20 @@ impl Engine {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
         let aspect_ratio = width as f32 / height as f32;
-        self.projection_matrix =
-            Mat4::perspective_lh(self.fov.to_radians(), aspect_ratio, self.z_near, self.z_far);
-        self.frustum = Frustum::new(self.fov.to_radians(), aspect_ratio, self.z_near, self.z_far);
+        self.fov_x =
+            (2.0 * (aspect_ratio * (self.fov_y.to_radians() / 2.0).tan()).atan()).to_degrees();
+        self.projection_matrix = Mat4::perspective_lh(
+            self.fov_y.to_radians(),
+            aspect_ratio,
+            self.z_near,
+            self.z_far,
+        );
+        self.frustum = Frustum::new(
+            self.fov_x.to_radians(),
+            self.fov_y.to_radians(),
+            self.z_near,
+            self.z_far,
+        );
     }
 
     pub fn camera(&self) -> &FpsCamera {
@@ -254,33 +269,33 @@ impl Engine {
             .transpose();
 
         for face in faces.iter() {
-            let face_vertices = [
+            let face_vertices: [Vertex; 3] = [
                 vertices[face.a as usize],
                 vertices[face.b as usize],
                 vertices[face.c as usize],
             ];
 
-            let face_texcoords = [
+            let face_texcoords: [Texel; 3] = [
                 face_vertices[0].texel,
                 face_vertices[1].texel,
                 face_vertices[2].texel,
             ];
 
             // Model Space --> World Space (positions)
-            let transformed_positions = [
+            let world_space_positions = [
                 world_matrix * face_vertices[0].position,
                 world_matrix * face_vertices[1].position,
                 world_matrix * face_vertices[2].position,
             ];
 
             // Calculate face normal (needed for backface culling)
-            let vec_ab = transformed_positions[1] - transformed_positions[0];
-            let vec_ac = transformed_positions[2] - transformed_positions[0];
+            let vec_ab = world_space_positions[1] - world_space_positions[0];
+            let vec_ac = world_space_positions[2] - world_space_positions[0];
             let face_normal = vec_ab.cross(vec_ac);
 
             // Apply backface culling
             if backface_culling {
-                let camera_ray = camera_position - transformed_positions[0];
+                let camera_ray = camera_position - world_space_positions[0];
                 if face_normal.dot(camera_ray) < 0.0 {
                     continue;
                 }
@@ -288,9 +303,9 @@ impl Engine {
 
             // Transform to view (camera) space
             let view_space_positions = [
-                view_matrix * transformed_positions[0],
-                view_matrix * transformed_positions[1],
-                view_matrix * transformed_positions[2],
+                view_matrix * world_space_positions[0],
+                view_matrix * world_space_positions[1],
+                view_matrix * world_space_positions[2],
             ];
 
             // Calculate colors based on shading mode
@@ -330,6 +345,7 @@ impl Engine {
 
             // ==================== FRUSTUM CLIPPING IN VIEW SPACE ====================
             // Create ClipVertex instances with all attributes for interpolation
+            // This consists of the vertex positions in view space, the texture coordinates, and the vertex colors (when rendering no texture)
             let clip_vertices = [
                 ClipVertex::new(view_space_positions[0], face_texcoords[0], vertex_colors[0]),
                 ClipVertex::new(view_space_positions[1], face_texcoords[1], vertex_colors[1]),

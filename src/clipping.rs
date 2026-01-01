@@ -142,26 +142,26 @@ impl ClippingPlane {
         }
     }
 
-    fn new_frustum_left(fov: f32) -> Self {
-        let half_fov = fov / 2.0;
+    fn new_frustum_left(fov_x: f32) -> Self {
+        let half_fov = fov_x / 2.0;
         let normal = Vec3::new(half_fov.cos(), 0.0, half_fov.sin());
         ClippingPlane::Left((Vec3::new(0.0, 0.0, 0.0), normal))
     }
 
-    fn new_frustum_right(fov: f32) -> Self {
-        let half_fov = fov / 2.0;
+    fn new_frustum_right(fov_x: f32) -> Self {
+        let half_fov = fov_x / 2.0;
         let normal = Vec3::new(-half_fov.cos(), 0.0, half_fov.sin());
         ClippingPlane::Right((Vec3::new(0.0, 0.0, 0.0), normal))
     }
 
-    fn new_frustum_top(fov: f32) -> Self {
-        let half_fov = fov / 2.0;
+    fn new_frustum_top(fov_y: f32) -> Self {
+        let half_fov = fov_y / 2.0;
         let normal = Vec3::new(0.0, -half_fov.cos(), half_fov.sin());
         ClippingPlane::Top((Vec3::new(0.0, 0.0, 0.0), normal))
     }
 
-    fn new_frustum_bottom(fov: f32) -> Self {
-        let half_fov = fov / 2.0;
+    fn new_frustum_bottom(fov_y: f32) -> Self {
+        let half_fov = fov_y / 2.0;
         let normal = Vec3::new(0.0, half_fov.cos(), half_fov.sin());
         ClippingPlane::Bottom((Vec3::new(0.0, 0.0, 0.0), normal))
     }
@@ -184,17 +184,13 @@ pub struct Frustum {
 }
 
 impl Frustum {
-    pub fn new(fov: f32, aspect: f32, znear: f32, zfar: f32) -> Self {
-        // Horizontal FOV derived from vertical FOV and aspect ratio
-        // tan(fov_x / 2) = aspect * tan(fov_y / 2)
-        let fov_x = 2.0 * (aspect * (fov / 2.0).tan()).atan();
-
+    pub fn new(fov_x: f32, fov_y: f32, znear: f32, zfar: f32) -> Self {
         Self {
             planes: [
                 ClippingPlane::new_frustum_left(fov_x),
                 ClippingPlane::new_frustum_right(fov_x),
-                ClippingPlane::new_frustum_top(fov),
-                ClippingPlane::new_frustum_bottom(fov),
+                ClippingPlane::new_frustum_top(fov_y),
+                ClippingPlane::new_frustum_bottom(fov_y),
                 ClippingPlane::new_frustum_near(znear),
                 ClippingPlane::new_frustum_far(zfar),
             ],
