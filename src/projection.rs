@@ -89,7 +89,7 @@ impl Projection {
     ///
     /// Note: This method is kept for reference. The engine now uses clip-space
     /// clipping which doesn't require rebuilding planes on projection changes.
-    #[allow(dead_code)]
+
     pub fn view_frustum(&self) -> ViewFrustum {
         ViewFrustum::new(self.fov_x(), self.fov_y, self.z_near, self.z_far)
     }

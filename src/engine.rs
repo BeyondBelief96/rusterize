@@ -84,7 +84,6 @@ pub struct Engine {
     rasterizer: RasterizerDispatcher,
     // Triangles grouped by model index for per-model texture support
     triangles_per_model: Vec<Vec<Triangle>>,
-    // Scene: collection of models
     models: Vec<Model>,
     model_names: HashMap<String, usize>,
     // Global texture fallback (used when model doesn't have its own)
@@ -218,7 +217,6 @@ impl Engine {
         self.model_names.clear();
     }
 
-
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
         let aspect_ratio = width as f32 / height as f32;
@@ -250,7 +248,6 @@ impl Engine {
     pub fn light_direction(&self) -> Vec3 {
         self.light.direction
     }
-
 
     /// Returns the rendered frame as bytes (ARGB8888 format)
     pub fn frame_buffer(&self) -> &[u8] {
@@ -285,6 +282,7 @@ impl Engine {
         let buffer_width = self.renderer.width();
         let buffer_height = self.renderer.height();
         let camera_position = self.camera.position();
+        let frustum = self.projection.view_frustum();
         let view_matrix = self.camera.view_matrix();
         let backface_culling = self.backface_culling;
         let shading_mode = self.shading_mode;
@@ -300,21 +298,35 @@ impl Engine {
 
             // Iterate over all meshes in this model
             for mesh in model.meshes() {
-                let faces = mesh.faces();
-                let vertices = mesh.vertices();
-
                 // Mesh local matrix from transform
                 let mesh_local_matrix = mesh.transform().to_matrix();
 
                 // Combined world matrix: model_world * mesh_local
                 let world_matrix = model_world_matrix * mesh_local_matrix;
 
+                // --- Frustum Culling ---
+                let bounds_world_center = world_matrix * mesh.bounds().center;
+                let bounds_view_center = view_matrix * bounds_world_center;
+
+                let model_scl = model.transform().scale();
+                let mesh_scl = mesh.transform().scale();
+                let scale_max = (model_scl.x * mesh_scl.x)
+                    .abs()
+                    .max((model_scl.y * mesh_scl.y).abs())
+                    .max((model_scl.z * mesh_scl.z).abs());
+                let view_radius = scale_max * mesh.bounds().radius;
+
+                if !frustum.contains_sphere(bounds_view_center, view_radius) {
+                    continue;
+                }
+
+                let faces = mesh.faces();
+                let vertices = mesh.vertices();
+
                 // Normal matrix = inverse transpose of rotation+scale (excludes translation)
                 // Combine model and mesh rotation+scale for correct normal transformation
                 let model_rot = model.transform().rotation();
-                let model_scl = model.transform().scale();
                 let mesh_rot = mesh.transform().rotation();
-                let mesh_scl = mesh.transform().scale();
 
                 let combined_rotation_scale = Mat4::rotation_x(model_rot.x)
                     * Mat4::rotation_y(model_rot.y)
@@ -397,8 +409,8 @@ impl Engine {
                             for i in 0..3 {
                                 let world_normal =
                                     (normal_matrix * face_vertices[i].normal).normalize();
-                                let diffuse =
-                                    self.light.intensity(world_normal) * self.light.diffuse_strength;
+                                let diffuse = self.light.intensity(world_normal)
+                                    * self.light.diffuse_strength;
                                 let intensity = (diffuse + self.light.ambient_intensity).min(1.0);
                                 vert_colors[i] = colors::modulate(base_color, intensity);
                             }
@@ -537,12 +549,8 @@ impl Engine {
                     .or(self.global_texture.as_ref());
 
                 for triangle in triangles {
-                    self.rasterizer.fill_triangle(
-                        triangle,
-                        &mut fb,
-                        triangle.color,
-                        texture,
-                    );
+                    self.rasterizer
+                        .fill_triangle(triangle, &mut fb, triangle.color, texture);
                 }
             }
         }
@@ -556,8 +564,13 @@ impl Engine {
                 }
                 if draw_vertices {
                     for vertex in &triangle.points {
-                        self.renderer
-                            .draw_rect(vertex.x as i32, vertex.y as i32, 4, 4, colors::VERTEX);
+                        self.renderer.draw_rect(
+                            vertex.x as i32,
+                            vertex.y as i32,
+                            4,
+                            4,
+                            colors::VERTEX,
+                        );
                     }
                 }
             }

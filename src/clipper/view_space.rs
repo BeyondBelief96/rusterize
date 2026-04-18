@@ -164,31 +164,30 @@ impl ViewFrustum {
         Self {
             planes: [
                 // Left plane: normal points right-ish, into the frustum
-                Plane::new(
-                    origin,
-                    Vec3::new(half_fov_x.cos(), 0.0, half_fov_x.sin()),
-                ),
+                Plane::new(origin, Vec3::new(half_fov_x.cos(), 0.0, half_fov_x.sin())),
                 // Right plane: normal points left-ish, into the frustum
-                Plane::new(
-                    origin,
-                    Vec3::new(-half_fov_x.cos(), 0.0, half_fov_x.sin()),
-                ),
+                Plane::new(origin, Vec3::new(-half_fov_x.cos(), 0.0, half_fov_x.sin())),
                 // Top plane: normal points down-ish, into the frustum
-                Plane::new(
-                    origin,
-                    Vec3::new(0.0, -half_fov_y.cos(), half_fov_y.sin()),
-                ),
+                Plane::new(origin, Vec3::new(0.0, -half_fov_y.cos(), half_fov_y.sin())),
                 // Bottom plane: normal points up-ish, into the frustum
-                Plane::new(
-                    origin,
-                    Vec3::new(0.0, half_fov_y.cos(), half_fov_y.sin()),
-                ),
+                Plane::new(origin, Vec3::new(0.0, half_fov_y.cos(), half_fov_y.sin())),
                 // Near plane: normal points forward (+Z)
                 Plane::new(Vec3::new(0.0, 0.0, z_near), Vec3::new(0.0, 0.0, 1.0)),
                 // Far plane: normal points backward (-Z)
                 Plane::new(Vec3::new(0.0, 0.0, z_far), Vec3::new(0.0, 0.0, -1.0)),
             ],
         }
+    }
+
+    pub fn contains_sphere(&self, center: Vec3, radius: f32) -> bool {
+        for plane in &self.planes {
+            // signed_distance > 0 means "inside" (normals point inward in this codebase)
+            if plane.signed_distance(center) < -radius {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Clip a polygon against all frustum planes.

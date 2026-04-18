@@ -25,8 +25,8 @@ use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 
-pub const WINDOW_WIDTH: u32 = 800;
-pub const WINDOW_HEIGHT: u32 = 600;
+pub const WINDOW_WIDTH: u32 = 1920;
+pub const WINDOW_HEIGHT: u32 = 1080;
 pub const FPS: u64 = 60;
 pub const FRAME_TARGET_TIME: f64 = 1000.0 / FPS as f64;
 

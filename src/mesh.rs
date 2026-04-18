@@ -66,21 +66,46 @@ pub(crate) struct Vertex {
     pub texel: Texel,
 }
 
+/// A bounding sphere that's computed for each mesh.
+/// Used for culling the mesh against the camera frustum
+/// before rasterization.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct BoundingSphere {
+    pub center: Vec3,
+    pub radius: f32,
+}
+
+impl BoundingSphere {
+    pub fn from_vertices(vertices: &[Vertex]) -> Self {
+        let n = vertices.len() as f32;
+        let center = vertices.iter().map(|v| v.position).sum::<Vec3>() / n;
+        let radius = vertices
+            .iter()
+            .map(|v| (v.position - center).magnitude())
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        Self { center, radius }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
     name: String,
     vertices: Vec<Vertex>,
     faces: Vec<Face>,
     transform: Transform,
+    bounding_sphere: BoundingSphere,
 }
 
 impl Mesh {
     pub(crate) fn new(name: String, vertices: Vec<Vertex>, faces: Vec<Face>) -> Self {
+        let bounding_sphere = BoundingSphere::from_vertices(&vertices);
         Self {
             name,
             vertices,
             faces,
             transform: Transform::default(),
+            bounding_sphere,
         }
     }
 
@@ -201,5 +226,9 @@ impl Mesh {
     /// Get a reference to the faces
     pub(crate) fn faces(&self) -> &[Face] {
         &self.faces
+    }
+
+    pub(crate) fn bounds(&self) -> BoundingSphere {
+        self.bounding_sphere
     }
 }

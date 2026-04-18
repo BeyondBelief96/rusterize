@@ -13,4 +13,6 @@ tobj = "4.0.3"
 criterion = "0.5"
 
 [profile.release]
-lto = "thin"
+lto = "fat"           # Full cross-crate optimization
+codegen-units = 1     # Better optimization, slower compile
+opt-level = 3         # Maximum optimization
