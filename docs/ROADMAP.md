@@ -614,13 +614,38 @@ Expected gain: off-screen objects drop from ~6 tests to ~1.1 on average. On-scre
 
 A related cheaper trick: **temporal coherency at the object level** — if neither the camera nor the mesh moved this frame, reuse last frame's in/out result entirely. Only worth it if you have thousands of static meshes.
 
-### Step 5 — Optimization B: AABB with the n/p-vertex test
+### Step 5 — Optimization B: AABB as a tighter secondary test (layered)
 
-Spheres are loose on elongated geometry (a runway, a mountain ridge). Replace `BoundingSphere` with `BoundingAabb { min: Vec3, max: Vec3 }`. The n/p-vertex trick tests only **one corner** per plane:
+Spheres are cheap but loose — an elongated mesh (a runway, a mountain ridge) has a sphere that overlaps the frustum even when the mesh doesn't. The fix isn't to replace the sphere; it's to **layer** an AABB test after it:
+
+1. **Sphere test first** (what you already have). Thanks to the plane-coherency cache, off-screen meshes bail in ~1 plane test.
+2. **If the sphere says "maybe inside":** run an AABB test for a tighter answer. If the AABB rejects, cull. Otherwise, proceed to rasterization.
+
+Key property: the sphere never produces false *negatives* — if it says outside, it truly is outside. Its only weakness is false *positives* ("maybe inside" when really outside), which get worse as meshes become elongated. That's exactly the gap the AABB closes.
+
+**Add a `BoundingAabb` alongside the existing `BoundingSphere` on `Mesh`:**
+
+```rust
+pub(crate) struct BoundingAabb { pub min: Vec3, pub max: Vec3 }
+
+impl BoundingAabb {
+    pub fn from_vertices(vertices: &[Vertex]) -> Self {
+        let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for v in vertices {
+            min.x = min.x.min(v.position.x); max.x = max.x.max(v.position.x);
+            min.y = min.y.min(v.position.y); max.y = max.y.max(v.position.y);
+            min.z = min.z.min(v.position.z); max.z = max.z.max(v.position.z);
+        }
+        Self { min, max }
+    }
+}
+```
+
+**Testing the AABB against the frustum with the n/p-vertex trick** — test only **one corner per plane**, the "positive vertex" (corner most aligned with the plane's inward normal):
 
 ```rust
 fn aabb_outside_plane(min: Vec3, max: Vec3, plane: &Plane) -> bool {
-    // "positive vertex" = the corner farthest along the plane normal
     let p = Vec3::new(
         if plane.normal.x >= 0.0 { max.x } else { min.x },
         if plane.normal.y >= 0.0 { max.y } else { min.y },
@@ -630,29 +655,71 @@ fn aabb_outside_plane(min: Vec3, max: Vec3, plane: &Plane) -> bool {
 }
 ```
 
-Transform the 8 AABB corners to view space (or reconstruct the view-space AABB from the 8 transformed corners — enclosing AABB of an OBB). Spheres are cheaper and simpler — only upgrade if you're seeing false-positive culling misses on long objects.
+If `aabb_outside_plane` is true for **any** of the 6 planes, the box is fully outside → cull.
 
-### Step 6 — Optimization C: Hierarchical model → mesh
-
-Your engine already has `Model → [Mesh]`. Add a `BoundingSphere` to `Model` that encloses all of its meshes' bounds. Then:
+**Engine loop becomes:**
 
 ```rust
-enum FrustumTest { Outside, FullyInside, Intersecting }
+if !frustum.contains_sphere_cached(view_center, view_radius, mesh.cull_cache()) {
+    continue; // sphere rejected it — fast path, done
+}
+if frustum.aabb_outside(transformed_min, transformed_max) {
+    continue; // sphere said maybe, AABB said no — tighter cull
+}
+// both passed — rasterize
+```
 
+**Subtlety: transforming AABBs under rotation.** A rotated model-space AABB becomes an *oriented* box in world space. Two options:
+1. **Recompute an axis-aligned enclosing box** each frame from the 8 transformed corners. Slightly looser than the original box, but simple.
+2. **Transform the frustum planes into model space** once per mesh instead. Tighter but needs the inverse of the model matrix. The Assarsson–Möller paper covers this variant.
+
+Option 1 is the easier starting point.
+
+**When to do this:** once §1.5 terrain chunks land. Cube meshes today won't benefit much. Add a counter tracking "sphere said maybe-inside but mesh was actually off-screen" — when that false-positive rate climbs above ~20% of tests, it's time.
+
+### Step 6 — Optimization C: Hierarchical model-level sphere (additive to per-mesh)
+
+Your existing per-mesh sphere test stays exactly as it is. This step adds a **coarser test above it**: one `BoundingSphere` per `Model` that encloses all of its meshes' bounds. The per-model sphere is a cheap early-out for the whole model; the per-mesh spheres remain the fine-grained cull inside. It's purely additive — no per-mesh logic changes.
+
+**Add on `Model`:** `bounds: BoundingSphere`, computed at load from the union of its meshes' spheres. A quick-and-loose construction: centroid = average of mesh sphere centers; radius = max over meshes of `(distance_to_centroid + mesh_radius)`.
+
+**The cull test needs three states now, not just in/out:**
+
+```rust
+enum FrustumTest {
+    Outside,      // sphere behind some plane       → skip everything
+    FullyInside,  // sphere inside every plane      → skip descendant tests
+    Intersecting, // sphere straddles some plane    → must test descendants
+}
+```
+
+Classification rule per plane: if `signed_distance >= +radius` → fully inside this plane; if `< -radius` → fully outside this plane; else → intersecting it. Combine across 6 planes: any "outside" wins, else if all "fully inside" → `FullyInside`, else `Intersecting`.
+
+**Engine loop becomes:**
+
+```rust
 for model in &self.models {
-    match classify_model_bounds(model, &planes) {
-        FrustumTest::Outside => continue,                     // skip model + all meshes
-        FrustumTest::FullyInside => render_without_culling(), // skip per-mesh tests
+    match frustum.classify_sphere(model_view_center, model_view_radius) {
+        FrustumTest::Outside => continue, // skip all meshes in this model
+        FrustumTest::FullyInside => {
+            // Every child mesh is guaranteed visible — skip their frustum tests entirely.
+            for mesh in model.meshes() { /* transform + rasterize, no cull */ }
+        }
         FrustumTest::Intersecting => {
-            for mesh in model.meshes() { /* per-mesh cull + render */ }
+            for mesh in model.meshes() {
+                // Your existing per-mesh sphere test (with cache) — unchanged.
+                if frustum.contains_sphere_cached(view_center, view_radius, mesh.cull_cache()) {
+                    /* transform + rasterize */
+                }
+            }
         }
     }
 }
 ```
 
-`classify_` returns three states instead of a bool: if `signed_distance >= +radius` for **every** plane, the sphere is fully inside and every descendant is fully inside too. Big win when meshes per model is high (>8).
+The win scales with `meshes_per_model` — biggest on models with 10+ sub-meshes (aircraft split into fuselage, wings, tail, cockpit, landing gear; or eventually a terrain "tile" that groups multiple LOD chunks).
 
-Further refinement from the paper — **masking**: track *which* planes the parent was fully inside. Children only need to test the remaining planes. Bit-mask of `u8` (6 bits). This compounds well with plane coherency.
+**Further refinement — "masking"** (from the Assarsson–Möller paper): when a model is `Intersecting`, record *which* planes it's fully inside vs. intersecting as a `u8` bitmask. Descendant meshes only need to test the intersecting planes. Stacks cleanly with plane coherency: a common case becomes "parent was fully inside 5 of 6 planes; each child only tests 1 plane; coherency makes that 1 test resolve in the hot path."
 
 ### Step 7 — Cleanup: Gribb-Hartmann plane extraction
 
@@ -691,8 +758,8 @@ Net effect: one new module (`math/plane.rs`), one deleted module (`clipper/view_
 2. Step 3 — naive sphere-vs-planes, using transform-bounds-to-view-space. Commit. Measure. (~1–2 hrs)
 3. Step 4 — rejecting-plane cache. Commit. Measure. (~1 hr)
 4. Step 7 — Gribb-Hartmann cleanup; retires `ViewFrustum::new`. Commit. (~2 hrs)
-5. Step 6 — hierarchical `Model` bounds if your scenes have many meshes per model. (~1–2 hrs)
-6. Step 5 — AABB + n/p-vertex only if sphere false-positives become visible. (~2–3 hrs)
+5. Step 6 — per-model `BoundingSphere` added *above* per-mesh tests (purely additive). (~1–2 hrs)
+6. Step 5 — layer AABB + n/p-vertex on top of the sphere, only for meshes where the sphere is loose (most likely §1.5 terrain chunks). (~2–3 hrs)
 
 Total: half a day for a useful culler, a full day for the mature version.
 

@@ -5,9 +5,32 @@
 
 use std::collections::HashMap;
 
-use crate::mesh::{LoadError, Mesh};
+use crate::math::vec3::Vec3;
+use crate::mesh::{BoundingSphere, LoadError, Mesh};
 use crate::texture::Texture;
 use crate::transform::Transform;
+
+/// Compute an enclosing sphere from a slice of mesh bounding spheres.
+/// Centroid of the mesh centers, with radius expanded to cover every mesh.
+/// Loose but correct; tighter construction (Ritter's) is not worth the complexity yet.
+fn bounds_of_meshes(meshes: &[Mesh]) -> BoundingSphere {
+    if meshes.is_empty() {
+        return BoundingSphere {
+            center: Vec3::ZERO,
+            radius: 0.0,
+        };
+    }
+    let n = meshes.len() as f32;
+    let center = meshes.iter().map(|m| m.bounds().center).sum::<Vec3>() / n;
+    let radius = meshes
+        .iter()
+        .map(|m| {
+            let b = m.bounds();
+            (b.center - center).magnitude() + b.radius
+        })
+        .fold(0.0_f32, f32::max);
+    BoundingSphere { center, radius }
+}
 
 /// A 3D model containing one or more meshes.
 ///
@@ -20,6 +43,9 @@ pub struct Model {
     mesh_names: HashMap<String, usize>,
     transform: Transform,
     texture: Option<Texture>,
+    /// Enclosing sphere of all mesh bounds, in model-local space. Used for
+    /// model-level frustum culling before descending into per-mesh tests.
+    bounds: BoundingSphere,
 }
 
 impl Model {
@@ -31,6 +57,10 @@ impl Model {
             mesh_names: HashMap::new(),
             transform: Transform::default(),
             texture: None,
+            bounds: BoundingSphere {
+                center: Vec3::ZERO,
+                radius: 0.0,
+            },
         }
     }
 
@@ -44,6 +74,7 @@ impl Model {
             .enumerate()
             .map(|(i, m)| (m.name().to_string(), i))
             .collect();
+        let bounds = bounds_of_meshes(&meshes);
 
         Ok(Self {
             name: name.into(),
@@ -51,6 +82,7 @@ impl Model {
             mesh_names,
             transform: Transform::default(),
             texture: None,
+            bounds,
         })
     }
 
@@ -122,6 +154,12 @@ impl Model {
         let index = self.meshes.len();
         self.meshes.push(mesh);
         self.mesh_names.insert(name, index);
+        self.bounds = bounds_of_meshes(&self.meshes);
+    }
+
+    /// Model-space enclosing sphere of all meshes. Used for model-level culling.
+    pub(crate) fn bounds(&self) -> BoundingSphere {
+        self.bounds
     }
 
     // ============ Texture ============

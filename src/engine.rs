@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use crate::camera::FpsCamera;
+use crate::clipper::view_space::FrustumTest;
 use crate::clipper::{ClipSpaceClipper, ClipSpacePolygon, ClipSpaceVertex};
 use crate::colors;
 use crate::light::DirectionalLight;
@@ -296,6 +297,26 @@ impl Engine {
             // Model world matrix from transform
             let model_world_matrix = model.transform().to_matrix();
 
+            // --- Model-level hierarchical frustum test ---
+            // Classify the model's enclosing sphere first. If the whole model
+            // is off-screen we skip every mesh; if it's fully inside we skip
+            // the per-mesh frustum tests (they're guaranteed to pass).
+            let model_bounds = model.bounds();
+            let model_view_center = view_matrix * (model_world_matrix * model_bounds.center);
+            let m_scl = model.transform().scale();
+            let model_scale_max = m_scl.x.abs().max(m_scl.y.abs()).max(m_scl.z.abs());
+            let model_view_radius = model_bounds.radius * model_scale_max;
+
+            let skip_mesh_cull = match frustum.classify_sphere(model_view_center, model_view_radius)
+            {
+                FrustumTest::Outside => {
+                    triangles_per_model.push(model_triangles);
+                    continue;
+                }
+                FrustumTest::FullyInside => true,
+                FrustumTest::Intersecting => false,
+            };
+
             // Iterate over all meshes in this model
             for mesh in model.meshes() {
                 // Mesh local matrix from transform
@@ -304,24 +325,47 @@ impl Engine {
                 // Combined world matrix: model_world * mesh_local
                 let world_matrix = model_world_matrix * mesh_local_matrix;
 
-                // --- Frustum Culling ---
-                let bounds_world_center = world_matrix * mesh.bounds().center;
-                let bounds_view_center = view_matrix * bounds_world_center;
-
+                // Scales are needed both for the cull radius and the normal matrix.
                 let model_scl = model.transform().scale();
                 let mesh_scl = mesh.transform().scale();
-                let scale_max = (model_scl.x * mesh_scl.x)
-                    .abs()
-                    .max((model_scl.y * mesh_scl.y).abs())
-                    .max((model_scl.z * mesh_scl.z).abs());
-                let view_radius = scale_max * mesh.bounds().radius;
 
-                if !frustum.contains_sphere_cached(
-                    bounds_view_center,
-                    view_radius,
-                    mesh.cull_cache(),
-                ) {
-                    continue;
+                if !skip_mesh_cull {
+                    // --- Layer 1: bounding-sphere test (with coherency cache) ---
+                    let bounds_view_center = view_matrix * (world_matrix * mesh.bounds().center);
+                    let scale_max = (model_scl.x * mesh_scl.x)
+                        .abs()
+                        .max((model_scl.y * mesh_scl.y).abs())
+                        .max((model_scl.z * mesh_scl.z).abs());
+                    let view_radius = scale_max * mesh.bounds().radius;
+
+                    if !frustum.contains_sphere_cached(
+                        bounds_view_center,
+                        view_radius,
+                        mesh.cull_cache(),
+                    ) {
+                        continue;
+                    }
+
+                    // --- Layer 2: AABB n/p-vertex test for a tighter answer ---
+                    // Transform the 8 local-space AABB corners into view space,
+                    // then take their enclosing axis-aligned box.
+                    let combined = view_matrix * world_matrix;
+                    let mut view_min =
+                        Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+                    let mut view_max =
+                        Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+                    for c in mesh.aabb().corners() {
+                        let v = combined * c;
+                        view_min.x = view_min.x.min(v.x);
+                        view_min.y = view_min.y.min(v.y);
+                        view_min.z = view_min.z.min(v.z);
+                        view_max.x = view_max.x.max(v.x);
+                        view_max.y = view_max.y.max(v.y);
+                        view_max.z = view_max.z.max(v.z);
+                    }
+                    if frustum.aabb_outside(view_min, view_max) {
+                        continue;
+                    }
                 }
 
                 let faces = mesh.faces();

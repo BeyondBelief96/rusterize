@@ -89,6 +89,44 @@ impl BoundingSphere {
     }
 }
 
+/// An axis-aligned bounding box in the mesh's local space. Used as a tighter
+/// secondary frustum test (layered after the sphere) for elongated meshes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct BoundingAabb {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+impl BoundingAabb {
+    pub fn from_vertices(vertices: &[Vertex]) -> Self {
+        let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for v in vertices {
+            min.x = min.x.min(v.position.x);
+            min.y = min.y.min(v.position.y);
+            min.z = min.z.min(v.position.z);
+            max.x = max.x.max(v.position.x);
+            max.y = max.y.max(v.position.y);
+            max.z = max.z.max(v.position.z);
+        }
+        Self { min, max }
+    }
+
+    /// The 8 corner points of the box.
+    pub fn corners(&self) -> [Vec3; 8] {
+        [
+            Vec3::new(self.min.x, self.min.y, self.min.z),
+            Vec3::new(self.max.x, self.min.y, self.min.z),
+            Vec3::new(self.min.x, self.max.y, self.min.z),
+            Vec3::new(self.max.x, self.max.y, self.min.z),
+            Vec3::new(self.min.x, self.min.y, self.max.z),
+            Vec3::new(self.max.x, self.min.y, self.max.z),
+            Vec3::new(self.min.x, self.max.y, self.max.z),
+            Vec3::new(self.max.x, self.max.y, self.max.z),
+        ]
+    }
+}
+
 /// Cache of the last plane that was rejected by the frustum culling.
 /// Used to avoid re-testing the same plane.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -103,21 +141,24 @@ pub struct Mesh {
     faces: Vec<Face>,
     transform: Transform,
     bounding_sphere: BoundingSphere,
+    bounding_aabb: BoundingAabb,
     cull_cache: Cell<CullCache>,
 }
 
 impl Mesh {
     pub(crate) fn new(name: String, vertices: Vec<Vertex>, faces: Vec<Face>) -> Self {
         let bounding_sphere = BoundingSphere::from_vertices(&vertices);
+        let bounding_aabb = BoundingAabb::from_vertices(&vertices);
         Self {
             name,
             vertices,
             faces,
             transform: Transform::default(),
             bounding_sphere,
+            bounding_aabb,
             cull_cache: Cell::new(CullCache {
-                last_rejecting_plane: None
-            })
+                last_rejecting_plane: None,
+            }),
         }
     }
 
@@ -242,6 +283,10 @@ impl Mesh {
 
     pub(crate) fn bounds(&self) -> BoundingSphere {
         self.bounding_sphere
+    }
+
+    pub(crate) fn aabb(&self) -> BoundingAabb {
+        self.bounding_aabb
     }
 
     pub(crate) fn cull_cache(&self) -> &Cell<CullCache> {

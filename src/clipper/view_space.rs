@@ -142,6 +142,19 @@ impl ClipPolygon {
     }
 }
 
+/// Three-state result of a sphere-vs-frustum classify.
+/// Used for hierarchical culling where a fully-inside parent lets children
+/// skip their own frustum tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrustumTest {
+    /// Fully outside the frustum — can be culled entirely.
+    Outside,
+    /// Fully inside the frustum — descendants are guaranteed visible.
+    FullyInside,
+    /// Straddles at least one plane — descendants must be tested individually.
+    Intersecting,
+}
+
 /// View-space frustum defined by 6 clipping planes.
 ///
 /// The planes are constructed from the projection parameters (FOV, near/far)
@@ -233,6 +246,48 @@ impl ViewFrustum {
             last_rejecting_plane: None,
         });
         true
+    }
+
+    /// Three-state classify used for hierarchical culling. A `FullyInside`
+    /// parent lets children skip their own frustum tests entirely.
+    pub(crate) fn classify_sphere(&self, center: Vec3, radius: f32) -> FrustumTest {
+        let mut fully_inside_all = true;
+        for plane in &self.planes {
+            let d = plane.signed_distance(center);
+            if d < -radius {
+                return FrustumTest::Outside;
+            }
+            if d < radius {
+                // Sphere straddles this plane → at best Intersecting.
+                fully_inside_all = false;
+            }
+        }
+        if fully_inside_all {
+            FrustumTest::FullyInside
+        } else {
+            FrustumTest::Intersecting
+        }
+    }
+
+    /// Returns true if the axis-aligned box is fully outside the frustum.
+    /// Uses the n/p-vertex trick: for each plane, pick the box corner farthest
+    /// along the plane's inward normal; if that corner is outside, the whole
+    /// box is outside.
+    ///
+    /// Intended as a tighter secondary test *after* the sphere test — spheres
+    /// are loose on elongated meshes; this closes the gap.
+    pub(crate) fn aabb_outside(&self, min: Vec3, max: Vec3) -> bool {
+        for plane in &self.planes {
+            let p = Vec3::new(
+                if plane.normal.x >= 0.0 { max.x } else { min.x },
+                if plane.normal.y >= 0.0 { max.y } else { min.y },
+                if plane.normal.z >= 0.0 { max.z } else { min.z },
+            );
+            if plane.signed_distance(p) < 0.0 {
+                return true;
+            }
+        }
+        false
     }
 
     /// Clip a polygon against all frustum planes.
