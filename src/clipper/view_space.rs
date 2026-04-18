@@ -9,7 +9,10 @@
 
 #![allow(dead_code)]
 
+use std::cell::Cell;
+
 use crate::colors;
+use crate::mesh::CullCache;
 use crate::prelude::{Vec2, Vec3};
 
 /// A plane defined by a point on the plane and its normal vector.
@@ -187,6 +190,48 @@ impl ViewFrustum {
             }
         }
 
+        true
+    }
+
+    /// Like `contains_sphere`, but tests the plane that rejected this object
+    /// on the previous frame first. Over successive frames, off-screen objects
+    /// tend to be rejected by the same plane, so this drops the expected
+    /// test count from 6 to ~1 for outside meshes.
+    ///
+    /// Meshes fully inside still pay the full 6 tests; the cache is cleared
+    /// for them, so a stale index can't mask a later rejection.
+    pub(crate) fn contains_sphere_cached(
+        &self,
+        center: Vec3,
+        radius: f32,
+        cache: &Cell<CullCache>,
+    ) -> bool {
+        let cached = cache.get();
+
+        // Fast path: the last rejecting plane still rejects → one test, and we're done.
+        if let Some(idx) = cached.last_rejecting_plane {
+            if self.planes[idx as usize].signed_distance(center) < -radius {
+                return false;
+            }
+        }
+
+        for (i, plane) in self.planes.iter().enumerate() {
+            // Already tested the cached plane above; don't re-test it.
+            if Some(i as i8) == cached.last_rejecting_plane {
+                continue;
+            }
+            if plane.signed_distance(center) < -radius {
+                cache.set(CullCache {
+                    last_rejecting_plane: Some(i as i8),
+                });
+                return false;
+            }
+        }
+
+        // Fully inside — clear so a stale index can't mask a future rejection.
+        cache.set(CullCache {
+            last_rejecting_plane: None,
+        });
         true
     }
 

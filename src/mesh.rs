@@ -6,6 +6,7 @@
 use std::fmt;
 
 use crate::{math::vec3::Vec3, prelude::Vec2, transform::Transform};
+use std::cell::Cell;
 
 /// Represents a triangle face with indices into the vertex array.
 /// Uses 0-based indexing.
@@ -88,6 +89,13 @@ impl BoundingSphere {
     }
 }
 
+/// Cache of the last plane that was rejected by the frustum culling.
+/// Used to avoid re-testing the same plane.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct CullCache {
+    pub(crate) last_rejecting_plane: Option<i8>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
     name: String,
@@ -95,6 +103,7 @@ pub struct Mesh {
     faces: Vec<Face>,
     transform: Transform,
     bounding_sphere: BoundingSphere,
+    cull_cache: Cell<CullCache>,
 }
 
 impl Mesh {
@@ -106,6 +115,9 @@ impl Mesh {
             faces,
             transform: Transform::default(),
             bounding_sphere,
+            cull_cache: Cell::new(CullCache {
+                last_rejecting_plane: None
+            })
         }
     }
 
@@ -230,5 +242,9 @@ impl Mesh {
 
     pub(crate) fn bounds(&self) -> BoundingSphere {
         self.bounding_sphere
+    }
+
+    pub(crate) fn cull_cache(&self) -> &Cell<CullCache> {
+        &self.cull_cache
     }
 }

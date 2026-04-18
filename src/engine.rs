@@ -316,7 +316,11 @@ impl Engine {
                     .max((model_scl.z * mesh_scl.z).abs());
                 let view_radius = scale_max * mesh.bounds().radius;
 
-                if !frustum.contains_sphere(bounds_view_center, view_radius) {
+                if !frustum.contains_sphere_cached(
+                    bounds_view_center,
+                    view_radius,
+                    mesh.cull_cache(),
+                ) {
                     continue;
                 }
 
