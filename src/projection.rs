@@ -4,7 +4,6 @@
 //! projection parameters (FOV, aspect ratio, near/far planes). It can generate
 //! the projection matrix.
 
-use crate::clipper::view_space::ViewFrustum;
 use crate::math::mat4::Mat4;
 
 /// Perspective projection parameters.
@@ -80,18 +79,6 @@ impl Projection {
     /// Generates the left-handed perspective projection matrix.
     pub fn matrix(&self) -> Mat4 {
         Mat4::perspective_lh(self.fov_y, self.aspect_ratio, self.z_near, self.z_far)
-    }
-
-    /// Builds view-space frustum planes for clipping.
-    ///
-    /// The frustum planes are positioned in view/camera space and can be used
-    /// to clip geometry before projection.
-    ///
-    /// Note: This method is kept for reference. The engine now uses clip-space
-    /// clipping which doesn't require rebuilding planes on projection changes.
-
-    pub fn view_frustum(&self) -> ViewFrustum {
-        ViewFrustum::new(self.fov_x(), self.fov_y, self.z_near, self.z_far)
     }
 }
 

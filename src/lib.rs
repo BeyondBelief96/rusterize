@@ -27,6 +27,7 @@ pub mod window;
 
 // Internal modules - used within the crate only
 pub(crate) mod clipper;
+pub(crate) mod frustum;
 pub(crate) mod mesh;
 pub(crate) mod render;
 

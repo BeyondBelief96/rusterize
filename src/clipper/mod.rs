@@ -1,17 +1,11 @@
-//! Polygon clipping implementations.
+//! Polygon clipping in homogeneous clip space.
 //!
-//! This module provides clipping against convex volumes using the
-//! Sutherland-Hodgman algorithm. Two implementations are available:
-//!
-//! - [`clip_space`]: Clipping in homogeneous clip space (after projection).
-//!   This is the preferred method as it uses fixed planes and doesn't need
-//!   to be rebuilt when projection parameters change.
-//!
-//! - [`view_space`]: Clipping in view/camera space (before projection).
-//!   Kept for reference but not actively used.
+//! Clipping happens after the vertex shader transforms vertices by the
+//! view-projection matrix but before the perspective divide. This is the
+//! approach real GPUs use — it avoids issues with vertices behind the camera
+//! and doesn't require rebuilding clipping planes when projection parameters
+//! change (the clip cube `-w ≤ x,y,z ≤ w` is canonical).
 
 pub mod clip_space;
-pub mod view_space;
 
-// Re-export commonly used types from clip_space (the active implementation)
 pub use clip_space::{ClipSpaceClipper, ClipSpacePolygon, ClipSpaceVertex};

@@ -9,13 +9,14 @@ The engine already implements the core scratchapixel pipeline:
 - Left-handed coordinate system, SDL2 for window/display only
 - Model → World → View → Clip transforms (`engine.rs`)
 - Perspective projection via `Mat4::perspective_lh` (`projection.rs`)
-- Sutherland–Hodgman polygon clipping in both clip-space and view-space (`clipper/`)
+- Sutherland–Hodgman polygon clipping in clip space (`clipper/clip_space.rs`)
 - Two rasterizers: scanline (flat-top/flat-bottom) and edge-function (GPU-style) (`render/rasterizer/`)
 - Per-pixel z-buffer storing `1/w` for correct linear interpolation in screen space
 - Flat and Gouraud shading, directional light with ambient (`light.rs`)
 - Texture modes: None / Replace / Modulate, with perspective-correct UV interpolation
 - OBJ mesh loading (`tobj`), textures (`image`), multi-mesh model support
 - Bresenham line drawing, backface culling, multiple render modes
+- Hierarchical frustum culling: per-model sphere classify → per-mesh sphere (with plane-coherency cache) → AABB n/p-vertex test, world-space planes extracted from VP via Gribb-Hartmann (`frustum.rs`, `math/plane.rs`)
 
 ## General-Purpose References
 
@@ -34,7 +35,9 @@ Keep these open while working on anything in this doc:
 
 Ordered roughly by flight-sim criticality and learning ROI. Numbering is just for reference; see the end-of-doc schedule for suggested ordering.
 
-### 1.1 Frustum culling at the object / chunk level
+### 1.1 Frustum culling at the object / chunk level — ✅ **Implemented**
+
+See Appendix A for the build-history walkthrough and Appendix A's tail for the as-of-today summary.
 
 **What:** Before transforming any of a model's vertices, test its world-space bounding sphere (or AABB) against the 6 frustum planes. Skip the whole model if outside.
 
@@ -390,9 +393,9 @@ Things that look fine today but will bite as you add features.
 
 Scanline uses `TextureShader` (affine UVs). Edge-function uses `PerspectiveCorrectTextureShader`. **The scanline rasterizer is silently producing wrong textures on close-up triangles.** Either unify both on perspective-correct, or document scanline as the deliberately-naive educational version.
 
-### TD-2: `clipper/view_space.rs` is entirely `#[allow(dead_code)]`
+### TD-2: ~~`clipper/view_space.rs` is entirely `#[allow(dead_code)]`~~ — ✅ **Resolved**
 
-Clip-space clipping is the right choice — it's what GPUs do. The whole view-space clipping module has been dead since that switch. Resolve alongside §1.1 (see Appendix A, Step 7): promote the `Plane` + `signed_distance` type to `src/math/plane.rs` where the culler can depend on it, then delete the rest of `view_space.rs` (the polygon clipping, `ViewFrustum`, and its usage in `Projection::view_frustum`). Clip-space handles per-triangle vertex generation; the new `Plane` module serves whole-object visibility. Different jobs, now with no vestigial middle.
+Resolved alongside §1.1 Step 7. `Plane` was promoted to `src/math/plane.rs` (pure geometry primitive). `Frustum` + `FrustumTest` + all cull tests moved to `src/frustum.rs`. The dead polygon-clipping code, `ViewFrustum::new`, and `Projection::view_frustum()` were all deleted, and `src/clipper/view_space.rs` is gone. `clipper/` now contains only the active `clip_space.rs`.
 
 ### TD-3: `Triangle.points: [Vec3; 3]` overloads `.z` as clip-W
 
@@ -423,16 +426,16 @@ It iterates every pixel even though it only draws on grid lines. Two `step_by(sp
 
 Each block is rough effort, not calendar time. Reorder freely.
 
-| # | Task | Section | Effort |
-|---|------|---------|--------|
-| 1 | Frustum culling (bounding spheres) | §1.1 | 0.5d |
-| 2 | Tech-debt sweep: scanline UV fix, delete view-space clipper, `ScreenVertex` type | TD-1, TD-2, TD-3 | 1d |
-| 3 | Profiler macros + depth/overdraw visualization | §3.2, §3.1 | 1d |
-| 4 | Sky dome + distance fog | §1.3, §1.4 | 1d |
-| 5 | Quaternion math + flight model + aircraft camera | §2.1, §2.2 | 2–3d |
-| 6 | Naive heightmap terrain | §1.5 phase 1 | 2d |
-| 7 | Bilinear texture filtering | §1.6 phase 1 | 0.5d |
-| 8 | HUD: font + airspeed/altitude/heading/attitude | §2.3 | 1–2d |
+| # | Task | Section | Effort | Status |
+|---|------|---------|--------|--------|
+| 1 | Frustum culling (bounding spheres + AABB layer + per-model hierarchy + Gribb-Hartmann) | §1.1 | 0.5d | ✅ done |
+| 2 | Tech-debt sweep: scanline UV fix, ~~delete view-space clipper~~, `ScreenVertex` type | TD-1, ~~TD-2~~, TD-3 | 1d | partial — TD-2 ✅ (done via §1.1); TD-1 and TD-3 open |
+| 3 | Profiler macros + depth/overdraw visualization | §3.2, §3.1 | 1d | open |
+| 4 | Sky dome + distance fog | §1.3, §1.4 | 1d | open |
+| 5 | Quaternion math + flight model + aircraft camera | §2.1, §2.2 | 2–3d | open |
+| 6 | Naive heightmap terrain | §1.5 phase 1 | 2d | open |
+| 7 | Bilinear texture filtering | §1.6 phase 1 | 0.5d | open |
+| 8 | HUD: font + airspeed/altitude/heading/attitude | §2.3 | 1–2d | open |
 
 **End state:** flying over textured terrain with a HUD inside two weeks.
 
@@ -471,7 +474,9 @@ Beyond the per-technique references, these are worth keeping on hand:
 
 ---
 
-## Appendix A: Implementing Frustum Culling (§1.1)
+## Appendix A: Implementing Frustum Culling (§1.1) — ✅ **Complete**
+
+**Status: all 7 steps implemented.** The build-order guide below is preserved because the *why* behind each step is still worth reading; for what lives in the repo right now see the "As-built summary" at the end of this appendix.
 
 A build-order guide for §1.1 — from naive to optimized. The optimization you hypothesized (remembering the plane that rejected last frame) is real and covered below as **Optimization A**; the Assarsson–Möller paper also contributes the tighter **n/p-vertex** test covered as **Optimization B**.
 
@@ -721,7 +726,11 @@ The win scales with `meshes_per_model` — biggest on models with 10+ sub-meshes
 
 **Further refinement — "masking"** (from the Assarsson–Möller paper): when a model is `Intersecting`, record *which* planes it's fully inside vs. intersecting as a `u8` bitmask. Descendant meshes only need to test the intersecting planes. Stacks cleanly with plane coherency: a common case becomes "parent was fully inside 5 of 6 planes; each child only tests 1 plane; coherency makes that 1 test resolve in the hot path."
 
-### Step 7 — Cleanup: Gribb-Hartmann plane extraction
+### Step 7 — Cleanup: Gribb-Hartmann plane extraction ✅
+
+**What shipped:** `Frustum::from_matrix(&Mat4)` in `src/frustum.rs` extracts 6 planes from any transformation matrix (projection → view space, `P*V` → world space, `P*V*M` → model space). `Plane::from_equation(a, b, c, d)` in `src/math/plane.rs` normalizes to Euclidean distance. Engine builds `Frustum::from_matrix(&(projection * view))` once per frame and runs all cull tests in world space — one fewer `Mat4×Vec3` per sphere test and one fewer `Mat4×Mat4` per AABB test compared to the view-space equivalent. The view-space clipper module is gone; `Projection::view_frustum()` is gone; trig-based plane construction is gone.
+
+The educational walkthrough stays below.
 
 Instead of rebuilding view-space planes from FOV + near/far and transforming them, extract 6 world-space planes **directly from the view-projection matrix**. Rows of VP combine into plane equations:
 
@@ -752,16 +761,16 @@ Net effect: one new module (`math/plane.rs`), one deleted module (`clipper/view_
 - **Counter HUD**: print `{tested}/{culled}/{drawn}` per frame. In a scattered-cube scene with the camera looking at one cube, expect culled/tested > 0.9.
 - **Criterion bench**: a scene of 1000 randomly-placed cubes, benched with culling on vs off. Should be a multiple-of-10 speedup for the typical case where most cubes are off-screen.
 
-### Order of implementation
+### Order of implementation (as built)
 
-1. Step 1 — `BoundingSphere` on `Mesh` (~30 min).
-2. Step 3 — naive sphere-vs-planes, using transform-bounds-to-view-space. Commit. Measure. (~1–2 hrs)
-3. Step 4 — rejecting-plane cache. Commit. Measure. (~1 hr)
-4. Step 7 — Gribb-Hartmann cleanup; retires `ViewFrustum::new`. Commit. (~2 hrs)
-5. Step 6 — per-model `BoundingSphere` added *above* per-mesh tests (purely additive). (~1–2 hrs)
-6. Step 5 — layer AABB + n/p-vertex on top of the sphere, only for meshes where the sphere is loose (most likely §1.5 terrain chunks). (~2–3 hrs)
+1. Step 1 ✅ — `BoundingSphere` on `Mesh` (`mesh.rs`).
+2. Step 3 ✅ — naive sphere-vs-planes, initially using view-space bounds.
+3. Step 4 ✅ — plane-coherency cache (`CullCache` via `Cell` on `Mesh`).
+4. Step 6 ✅ — per-model `BoundingSphere` + three-state classify (`FrustumTest` on `Model`).
+5. Step 5 ✅ — AABB layered after the sphere (`BoundingAabb` on `Mesh`, `Frustum::aabb_outside`).
+6. Step 7 ✅ — Gribb-Hartmann extraction, switch to world-space planes, delete `view_space.rs`.
 
-Total: half a day for a useful culler, a full day for the mature version.
+Steps 5 and 6 were done in the opposite order from the original plan because per-model bounds (Step 6) landed before the AABB layer (Step 5). Step 7 was done last rather than mid-way as originally suggested, since the world-space cleanup was best done once all the cull paths were settled.
 
 ### References for this appendix
 
@@ -769,3 +778,26 @@ Total: half a day for a useful culler, a full day for the mature version.
 - **Gribb & Hartmann — *Fast Extraction of Viewing Frustum Planes from the World-View-Projection Matrix*** — the canonical reference for Step 7. Search by title.
 - **Christer Ericson — *Real-Time Collision Detection*, Chapter 4** — the definitive textbook treatment of bounding volumes and plane tests.
 - **Jack Ritter — *An Efficient Bounding Sphere*** (Graphics Gems I, 1990) — better bounding-sphere construction than the centroid approach.
+
+---
+
+### As-built summary
+
+Where culling lives in the repo today:
+
+| File | Contents |
+|------|----------|
+| `src/math/plane.rs` | `Plane { point, normal }`, `Plane::from_equation(a, b, c, d)` (normalizes), `signed_distance` |
+| `src/frustum.rs` | `Frustum`, `FrustumTest::{Outside, FullyInside, Intersecting}`, `from_matrix` (Gribb-Hartmann), `contains_sphere`, `contains_sphere_cached`, `classify_sphere`, `aabb_outside` |
+| `src/mesh.rs` | `BoundingSphere`, `BoundingAabb`, `CullCache` (with `last_rejecting_plane: Option<i8>`), `Mesh::{bounds, aabb, cull_cache}` accessors |
+| `src/model.rs` | Per-model `BoundingSphere` (enclosing sphere of all mesh bounds), recomputed on `add_mesh`, accessor `Model::bounds()` |
+| `src/engine.rs::update()` | One frustum per frame via `Frustum::from_matrix(&(P*V))`. Per model: classify sphere; Outside → skip; FullyInside → skip per-mesh cull; Intersecting → run per-mesh cull. Per mesh cull: cached sphere test → AABB n/p-vertex. |
+
+The `clipper/` module now contains only `clip_space.rs` (active per-triangle clipping).
+
+### Test coverage
+
+- `math::plane::tests::from_equation_normalizes` — scaled coefficients still produce unit normal.
+- `math::plane::tests::signed_distance_is_symmetric` — sign matches which side of the plane the point lies on.
+- `frustum::tests::from_matrix_produces_valid_frustum` — center of frustum is inside; behind near, past far, and way off-axis are outside.
+- `frustum::tests::classify_returns_three_states` — small sphere inside classifies `FullyInside`; huge sphere classifies `Intersecting`; far-behind sphere classifies `Outside`.

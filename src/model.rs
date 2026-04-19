@@ -35,7 +35,7 @@ fn bounds_of_meshes(meshes: &[Mesh]) -> BoundingSphere {
 /// A 3D model containing one or more meshes.
 ///
 /// Models are loaded from OBJ files and can contain multiple named meshes.
-/// The model has a world transform (position, rotation, scale) and each
+/// The model has a world transform (position, rotation, scale), and each
 /// mesh within it can have an additional local transform.
 pub struct Model {
     name: String,
@@ -43,8 +43,6 @@ pub struct Model {
     mesh_names: HashMap<String, usize>,
     transform: Transform,
     texture: Option<Texture>,
-    /// Enclosing sphere of all mesh bounds, in model-local space. Used for
-    /// model-level frustum culling before descending into per-mesh tests.
     bounds: BoundingSphere,
 }
 
