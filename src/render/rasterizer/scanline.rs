@@ -68,11 +68,10 @@
 //! - Abrash, Michael, "Graphics Programming Black Book"
 
 use super::shader::{FlatShader, GouraudShader, PixelShader, TextureModulateShader, TextureShader};
-use super::{Rasterizer, Triangle};
+use super::{Rasterizer, ScreenVertex, Triangle};
 use crate::engine::TextureMode;
 use crate::math::utils::{edge_function, triangle_area};
 use crate::math::vec2::Vec2;
-use crate::math::vec3::Vec3;
 use crate::render::framebuffer::FrameBuffer;
 use crate::texture::Texture;
 use crate::ShadingMode;
@@ -123,15 +122,15 @@ impl ScanlineRasterizer {
     /// # Arguments
     ///
     /// * `v0`, `v1`, `v2` - Mutable references to vertices to be sorted in-place
-    fn sort_vertices(v0: &mut Vec3, v1: &mut Vec3, v2: &mut Vec3) {
+    fn sort_vertices(v0: &mut ScreenVertex, v1: &mut ScreenVertex, v2: &mut ScreenVertex) {
         // Three comparisons suffice for 3 elements (bubble sort)
-        if v1.y < v0.y {
+        if v1.position.y < v0.position.y {
             std::mem::swap(v0, v1);
         }
-        if v2.y < v1.y {
+        if v2.position.y < v1.position.y {
             std::mem::swap(v1, v2);
         }
-        if v1.y < v0.y {
+        if v1.position.y < v0.position.y {
             std::mem::swap(v0, v1);
         }
     }
@@ -148,24 +147,24 @@ impl ScanlineRasterizer {
     /// using the original vertex order.
     ///
     /// # Arguments
-    /// * `v0, v1, v2` - Original (unsorted) triangle vertices (z stores clip-space W)
+    /// * `v0, v1, v2` - Original (unsorted) triangle vertices
     /// * `buffer` - Framebuffer to write to
     /// * `shader` - Pixel shader for color computation
     fn rasterize_with_shader<S: PixelShader>(
-        v0: Vec3,
-        v1: Vec3,
-        v2: Vec3,
+        v0: ScreenVertex,
+        v1: ScreenVertex,
+        v2: ScreenVertex,
         buffer: &mut FrameBuffer,
         shader: &S,
     ) {
-        // Precompute 1/w for each vertex (z component stores clip-space W)
-        // These can be linearly interpolated in screen space for depth testing
-        let inv_w = [1.0 / v0.z, 1.0 / v1.z, 1.0 / v2.z];
+        // Precompute 1/w for each vertex — linear in screen space,
+        // so it can be barycentrically interpolated for depth testing.
+        let inv_w = [1.0 / v0.w, 1.0 / v1.w, 1.0 / v2.w];
 
         // Convert to Vec2 for barycentric calculations (only x, y matter)
-        let v0_2d = Vec2::new(v0.x, v0.y);
-        let v1_2d = Vec2::new(v1.x, v1.y);
-        let v2_2d = Vec2::new(v2.x, v2.y);
+        let v0_2d = Vec2::new(v0.position.x, v0.position.y);
+        let v1_2d = Vec2::new(v1.position.x, v1.position.y);
+        let v2_2d = Vec2::new(v2.position.x, v2.position.y);
 
         // Compute area for barycentric normalization
         let area = triangle_area(v0_2d, v1_2d, v2_2d);
@@ -182,12 +181,12 @@ impl ScanlineRasterizer {
         Self::sort_vertices(&mut sv0, &mut sv1, &mut sv2);
 
         // Check triangle type and call appropriate fill method
-        if (sv1.y - sv2.y).abs() < f32::EPSILON {
+        if (sv1.position.y - sv2.position.y).abs() < f32::EPSILON {
             // Flat-bottom triangle
             Self::fill_flat_bottom_with_shader(
                 sv0, sv1, sv2, v0_2d, v1_2d, v2_2d, inv_w, inv_area, buffer, shader,
             );
-        } else if (sv0.y - sv1.y).abs() < f32::EPSILON {
+        } else if (sv0.position.y - sv1.position.y).abs() < f32::EPSILON {
             // Flat-top triangle
             Self::fill_flat_top_with_shader(
                 sv0, sv1, sv2, v0_2d, v1_2d, v2_2d, inv_w, inv_area, buffer, shader,
@@ -196,10 +195,14 @@ impl ScanlineRasterizer {
             // General triangle - split into flat-bottom + flat-top
 
             // t is the ratio of the height of the triangle from sv0 to sv1 to the total height of the triangle
-            let t = (sv1.y - sv0.y) / (sv2.y - sv0.y);
+            let t = (sv1.position.y - sv0.position.y) / (sv2.position.y - sv0.position.y);
             // We calculate the midpoint x coordinate by interpolating the x coordinates of sv0 and sv2 based on the ratio t
-            let split_x = sv0.x + (sv2.x - sv0.x) * t;
-            let split_point = Vec3::new(split_x, sv1.y, 0.0);
+            let split_x = sv0.position.x + (sv2.position.x - sv0.position.x) * t;
+            // The split point's W is never read downstream — the helpers only
+            // use `.position` for scanline traversal, and depth interpolation
+            // pulls from the original `inv_w` array. Pass `sv0.w` so the
+            // ScreenVertex has a valid (positive) W if anyone later reads it.
+            let split_point = ScreenVertex::new(Vec2::new(split_x, sv1.position.y), sv0.w);
 
             // Fill top half (flat-bottom)
             Self::fill_flat_bottom_with_shader(
@@ -239,10 +242,10 @@ impl ScanlineRasterizer {
     /// * `inv_w` - 1/w values for each original vertex (for depth interpolation)
     /// * `inv_area` - 1/area for barycentric normalization
     fn fill_flat_bottom_with_shader<S: PixelShader>(
-        sv0: Vec3, // Top vertex (sorted)
-        sv1: Vec3, // Bottom-left (sorted)
-        sv2: Vec3, // Bottom-right (sorted)
-        v0: Vec2,  // Original vertices for barycentrics
+        sv0: ScreenVertex, // Top vertex (sorted)
+        sv1: ScreenVertex, // Bottom-left (sorted)
+        sv2: ScreenVertex, // Bottom-right (sorted)
+        v0: Vec2,          // Original vertices for barycentrics
         v1: Vec2,
         v2: Vec2,
         inv_w: [f32; 3], // 1/w for each original vertex
@@ -250,21 +253,21 @@ impl ScanlineRasterizer {
         buffer: &mut FrameBuffer,
         shader: &S,
     ) {
-        let height = sv1.y - sv0.y;
+        let height = sv1.position.y - sv0.position.y;
         if height.abs() < f32::EPSILON {
             return;
         }
 
-        let inv_slope_1 = (sv1.x - sv0.x) / height;
-        let inv_slope_2 = (sv2.x - sv0.x) / height;
+        let inv_slope_1 = (sv1.position.x - sv0.position.x) / height;
+        let inv_slope_2 = (sv2.position.x - sv0.position.x) / height;
 
-        let y_start = sv0.y.ceil() as i32;
-        let y_end = sv1.y.floor() as i32;
+        let y_start = sv0.position.y.ceil() as i32;
+        let y_end = sv1.position.y.floor() as i32;
 
         for y in y_start..=y_end {
-            let dy = y as f32 - sv0.y;
-            let x1 = sv0.x + inv_slope_1 * dy;
-            let x2 = sv0.x + inv_slope_2 * dy;
+            let dy = y as f32 - sv0.position.y;
+            let x1 = sv0.position.x + inv_slope_1 * dy;
+            let x2 = sv0.position.x + inv_slope_2 * dy;
 
             let (x_left, x_right) = if x1 < x2 { (x1, x2) } else { (x2, x1) };
 
@@ -293,10 +296,10 @@ impl ScanlineRasterizer {
     /// * `inv_w` - 1/w values for each original vertex (for depth interpolation)
     /// * `inv_area` - 1/area for barycentric normalization
     fn fill_flat_top_with_shader<S: PixelShader>(
-        sv0: Vec3, // Top-left (sorted)
-        sv1: Vec3, // Top-right (sorted)
-        sv2: Vec3, // Bottom vertex (sorted)
-        v0: Vec2,  // Original vertices for barycentrics
+        sv0: ScreenVertex, // Top-left (sorted)
+        sv1: ScreenVertex, // Top-right (sorted)
+        sv2: ScreenVertex, // Bottom vertex (sorted)
+        v0: Vec2,          // Original vertices for barycentrics
         v1: Vec2,
         v2: Vec2,
         inv_w: [f32; 3], // 1/w for each original vertex
@@ -304,21 +307,21 @@ impl ScanlineRasterizer {
         buffer: &mut FrameBuffer,
         shader: &S,
     ) {
-        let height = sv2.y - sv0.y;
+        let height = sv2.position.y - sv0.position.y;
         if height.abs() < f32::EPSILON {
             return;
         }
 
-        let inv_slope_1 = (sv2.x - sv0.x) / height;
-        let inv_slope_2 = (sv2.x - sv1.x) / height;
+        let inv_slope_1 = (sv2.position.x - sv0.position.x) / height;
+        let inv_slope_2 = (sv2.position.x - sv1.position.x) / height;
 
-        let y_start = sv0.y.ceil() as i32;
-        let y_end = sv2.y.floor() as i32;
+        let y_start = sv0.position.y.ceil() as i32;
+        let y_end = sv2.position.y.floor() as i32;
 
         for y in y_start..=y_end {
-            let dy = y as f32 - sv0.y;
-            let x1 = sv0.x + inv_slope_1 * dy;
-            let x2 = sv1.x + inv_slope_2 * dy;
+            let dy = y as f32 - sv0.position.y;
+            let x1 = sv0.position.x + inv_slope_1 * dy;
+            let x2 = sv1.position.x + inv_slope_2 * dy;
 
             let (x_left, x_right) = if x1 < x2 { (x1, x2) } else { (x2, x1) };
 

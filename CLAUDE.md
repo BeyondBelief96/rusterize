@@ -70,10 +70,43 @@ This is a CPU-based software-rendered 3D graphics engine using SDL2 only for win
 - Y-axis: positive down (screen space)
 - Z-axis: positive into the screen
 
-This affects:
-- Cross product calculations (use left-hand rule)
-- Winding order interpretation
-- Projection matrices use `Mat4::perspective_lh`
+#### Winding order
+
+Winding is **not stored or enforced** anywhere — the OBJ loader trusts
+whatever vertex order the file provides. Front-facing vs back-facing is
+derived at runtime from the direction of the face normal:
+
+1. `face_normal = (v1 - v0).cross(v2 - v0)` (`engine.rs:472-474`)
+2. `if face_normal.dot(camera_ray) < 0.0 { cull }` (`engine.rs:477-482`)
+
+Because `Vec3::cross` uses the standard formula and the coordinate system is
+left-handed, **`(B-A) × (C-A)` points toward the camera when `A → B → C` is
+traversed clockwise from the viewer's side**. So in this codebase:
+
+- **CW-wound triangles are front-facing.**
+- A CCW-only mesh would have every face culled — fix by reversing indices
+  on import, or by flipping the cull test sign.
+
+The edge-function rasterizer (`edgefunction.rs:176-183`) is winding-agnostic
+on the fill side — it checks the sign of the signed area per-triangle — so
+clipped fragments can come out either winding without breaking fills.
+
+#### Where handedness and winding affect the math
+
+| Location | What depends on LH / winding |
+|----------|------------------------------|
+| `math/mat4.rs` `perspective_lh` | `m[3][2] = +1` so `w_clip = +z_view`; z=near → NDC −1, z=far → NDC +1. RH would flip signs. |
+| `math/mat4.rs` `look_at_lh` | Basis built as `right = up.cross(forward)`; RH would swap that order. |
+| `math/vec3.rs` `Vec3::cross` | Formula is handedness-neutral, but *interpretation* of the result direction follows the left-hand rule. |
+| `engine.rs:472-482` | Backface cull sign (`dot < 0 = back`) relies on the LH + CW-front convention. |
+| `engine.rs:592-593` | Viewport Y flip (`1.0 - ndc_y`) — NDC has +Y up, framebuffer has +Y down. |
+| `frustum.rs` | Gribb-Hartmann plane extraction assumes LH clip-z range `[-1, 1]`. Explicit comment at `frustum.rs:54,74`. |
+| `clipper/clip_space.rs` | Canonical clip cube `-w ≤ z ≤ w` assumes the LH z-range `perspective_lh` produces. |
+
+The chain: LH basis → LH projection → LH clip-space z-range → frustum plane
+extraction assumes that range → cross product in LH means CW = front-facing
+→ backface cull `dot < 0` drops back faces. Flip any one link and you must
+flip the matching pieces.
 
 ### Rendering Pipeline
 

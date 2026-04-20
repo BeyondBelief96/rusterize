@@ -335,7 +335,7 @@ impl FpsCameraController {
         if dx != 0 || dy != 0 {
             camera.rotate(
                 dx as f32 * self.look_sensitivity,
-                dy as f32 * self.look_sensitivity,
+                -dy as f32 * self.look_sensitivity,
             );
         }
     }

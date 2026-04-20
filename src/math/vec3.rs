@@ -131,7 +131,20 @@ impl Vec3 {
     }
 
     /// Returns the cross product of two vectors.
-    /// The resulting vector is perpendicular to both input vectors.
+    ///
+    /// The resulting vector is perpendicular to both inputs. The formula
+    /// itself is handedness-neutral, but the *direction* of the result is
+    /// interpreted via the hand rule of whichever coordinate system is in
+    /// use.
+    ///
+    /// This codebase is **left-handed** (see `CLAUDE.md` → Coordinate
+    /// System), so the left-hand rule applies: curl the fingers of your
+    /// left hand from `self` toward `other`; the thumb points along the
+    /// returned vector. Consequently, for a triangle with vertices
+    /// `A, B, C` traversed **clockwise** from the viewer's side,
+    /// `(B - A).cross(C - A)` points **toward the viewer** — this is what
+    /// makes the engine's backface test (`engine.rs:477-482`) treat CW
+    /// triangles as front-facing.
     pub fn cross(&self, other: Self) -> Self {
         Self {
             x: self.y * other.z - self.z * other.y,

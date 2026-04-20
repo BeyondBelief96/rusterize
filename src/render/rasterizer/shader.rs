@@ -17,8 +17,9 @@
 //! - Texture sampling
 //! - Final color computation
 
+use super::ScreenVertex;
 use crate::colors::{pack_color, unpack_color};
-use crate::prelude::{Vec2, Vec3};
+use crate::prelude::Vec2;
 use crate::texture::Texture;
 
 /// Trait for per-pixel shading computations.
@@ -210,10 +211,9 @@ impl<'a> PerspectiveCorrectTextureShader<'a> {
     /// # Arguments
     /// * `texture` - The texture to sample
     /// * `uvs` - Texture coordinates for each vertex
-    /// * `points` - Screen-space vertices (W stored in z component)
-    pub fn new(texture: &'a Texture, uvs: [Vec2; 3], points: [Vec3; 3]) -> Self {
-        // Extract W from the z component (stored by engine.rs during projection)
-        let w = [points[0].z, points[1].z, points[2].z];
+    /// * `points` - Screen-space vertices; only `.w` is read here
+    pub fn new(texture: &'a Texture, uvs: [Vec2; 3], points: [ScreenVertex; 3]) -> Self {
+        let w = [points[0].w, points[1].w, points[2].w];
 
         Self {
             texture,
@@ -257,10 +257,10 @@ impl<'a> PerspectiveCorrectTextureModulateShader<'a> {
     pub fn new(
         texture: &'a Texture,
         uvs: [Vec2; 3],
-        points: [Vec3; 3], // W stored in z component
+        points: [ScreenVertex; 3],
         vertex_colors: [u32; 3],
     ) -> Self {
-        let w = [points[0].z, points[1].z, points[2].z];
+        let w = [points[0].w, points[1].w, points[2].w];
 
         Self {
             texture,

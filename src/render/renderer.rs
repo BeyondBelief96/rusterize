@@ -105,30 +105,30 @@ impl Renderer {
         let [p0, p1, p2] = triangle.points;
 
         self.draw_line_bresenham(
-            p0.x as i32,
-            p0.y as i32,
-            p0.z,
-            p1.x as i32,
-            p1.y as i32,
-            p1.z,
+            p0.position.x as i32,
+            p0.position.y as i32,
+            p0.w,
+            p1.position.x as i32,
+            p1.position.y as i32,
+            p1.w,
             color,
         );
         self.draw_line_bresenham(
-            p1.x as i32,
-            p1.y as i32,
-            p1.z,
-            p2.x as i32,
-            p2.y as i32,
-            p2.z,
+            p1.position.x as i32,
+            p1.position.y as i32,
+            p1.w,
+            p2.position.x as i32,
+            p2.position.y as i32,
+            p2.w,
             color,
         );
         self.draw_line_bresenham(
-            p2.x as i32,
-            p2.y as i32,
-            p2.z,
-            p0.x as i32,
-            p0.y as i32,
-            p0.z,
+            p2.position.x as i32,
+            p2.position.y as i32,
+            p2.w,
+            p0.position.x as i32,
+            p0.position.y as i32,
+            p0.w,
             color,
         );
     }

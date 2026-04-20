@@ -1,0 +1,4 @@
+[env]
+# Bundled SDL2's CMakeLists uses older policy versions that newer CMake
+# refuses by default. This override lets sdl2-sys configure on modern CMake.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

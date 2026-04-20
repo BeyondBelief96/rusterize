@@ -56,6 +56,8 @@ See Appendix A for the build-history walkthrough and Appendix A's tail for the a
 
 ### 1.2 Sub-pixel precision + top-left fill rule
 
+See Appendix B for the build-order walkthrough.
+
 **What:** `render/rasterizer/edgefunction.rs` currently evaluates edge functions in `f32` at pixel centers with `>= 0` tests. That works for single triangles but double-shades (or gaps) pixels along shared edges. GPUs solve this with **fixed-point vertex coordinates** (4 or 8 sub-pixel bits) and the **top-left rule** for edge ownership.
 
 **Why it matters:** Teaches fixed-point rasterization, edge ownership, and watertight meshes. Essential once you render terrain — shared ridge edges will shimmer without it.
@@ -801,3 +803,542 @@ The `clipper/` module now contains only `clip_space.rs` (active per-triangle cli
 - `math::plane::tests::signed_distance_is_symmetric` — sign matches which side of the plane the point lies on.
 - `frustum::tests::from_matrix_produces_valid_frustum` — center of frustum is inside; behind near, past far, and way off-axis are outside.
 - `frustum::tests::classify_returns_three_states` — small sphere inside classifies `FullyInside`; huge sphere classifies `Intersecting`; far-behind sphere classifies `Outside`.
+
+---
+
+## Appendix B: Implementing Sub-pixel Precision + Top-Left Fill Rule (§1.2)
+
+**Status: open — this appendix is the plan.**
+
+A build-order guide for §1.2, starting from today's `f32`-at-pixel-centers edge-function rasterizer and ending at the fixed-point, watertight, top-left-correct version. The *why* matters as much as the steps — each change is small but they only make sense together.
+
+### Why the current rasterizer doesn't satisfy 1.2
+
+`src/render/rasterizer/edgefunction.rs::rasterize_with_shader` (lines 128-198) does three things 1.2 wants changed:
+
+1. **Edge functions are evaluated in `f32`.** `edge_function` is `(b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)` at line 108. Floating-point multiply-subtract is not associative, so the *same* edge evaluated from two triangles sharing it can land on two different `f32` values at the same pixel. That's the mechanism behind single-pixel cracks along shared edges.
+
+2. **Inside test is `wi >= 0` / `wi <= 0`.** Lines 177-183. A pixel center that lies *exactly* on an edge gives `wi == 0` and passes the test for both triangles sharing that edge. Both triangles shade the pixel — the second write clobbers the first. For opaque z-tested geometry that's usually silent waste; with transparency or blending it produces visible double-darkening; and with terrain ridges where many triangles share edges at screen-aligned angles it shows up as subtle shimmer.
+
+3. **Vertex `(x, y)` is raw `f32` from the viewport transform** (`engine.rs:599-603`). There is no canonical snap-point, so "the same edge" has no canonical representation — the FP non-determinism above is baked in from the start.
+
+### What 1.2 replaces them with
+
+- **Fixed-point vertex coordinates.** Snap `(x, y)` to a sub-pixel grid — 4 fractional bits (step = 1/16 pixel) is the standard starting point; D3D9 uses 8 bits. After the snap, vertex positions are `i32` values and the edge function is exact integer arithmetic in `i64`. Two triangles sharing an edge get *bit-identical* edge values at every pixel — determinism restored.
+
+- **Top-left fill rule.** Define canonical ownership of boundary pixels: a pixel with its center exactly on a triangle edge belongs to the triangle for which that edge is a "top" or "left" edge (the D3D convention). Implemented by subtracting 1 from the edge function result for non-top-left edges before the `>= 0` test. The only pixels affected are the ones previously tied at `wi == 0` — exactly the shared-edge boundary. Each boundary pixel is now owned by exactly one triangle.
+
+- **Watertight coverage, guaranteed.** Together these two eliminate both failure modes — cracks (from FP non-determinism) and double-writes (from tied boundary tests). The mesh rasterizes as if it were a single coverage mask.
+
+### What this touches
+
+- `src/render/rasterizer/edgefunction.rs::rasterize_with_shader` — the single function that needs the full rewrite. Bounding-box setup, edge function, inside test, and barycentric derivation all change.
+- `src/render/rasterizer/mod.rs::Triangle.points` — `[Vec3; 3]` today. The **Pre-step (TD-3)** below swaps it for `[ScreenVertex; 3]` so the type names what `.x`/`.y`/`.z` actually mean. §1.2 then only touches one type.
+- `src/engine.rs:599-603` — viewport transform. No change needed for §1.2 itself; the rasterizer converts float → fixed on entry. (TD-3 changes the packing of the output from `Vec3::new(x, y, w)` to `ScreenVertex::new(Vec2, w)`.)
+- `src/render/rasterizer/scanline.rs` — mostly untouched by the §1.2 fixed-point work, but TD-3 renames the field access on entry. TD-1 separately notes its affine UVs are also wrong.
+- `src/render/rasterizer/shader.rs` — `PerspectiveCorrectTextureShader::new` and `PerspectiveCorrectTextureModulateShader::new` both extract `w` from a `[Vec3; 3]` parameter today. TD-3 swaps that to `[ScreenVertex; 3]`.
+- `src/render/renderer.rs::draw_triangle_wireframe` — reads `p.z` expecting W. TD-3 renames to `p.w`.
+
+### Pre-step — Land TD-3 (`ScreenVertex`) first
+
+The §1.2 rewrite is significantly cleaner if the rasterizer no longer has to decode `(screen_x, screen_y, clip_w)` from a `Vec3`. This is exactly what TD-3 is about. Doing it first means §1.2's fixed-point conversion lives at one well-defined place instead of hunting `Vec3` through every rasterizer site.
+
+#### Why TD-3 now and not later
+
+Today `Triangle.points: [Vec3; 3]` stores pixel `x`/`y` in `.x`/`.y` and clip-space W in `.z`. The type says nothing about this — it's documentation and discipline. Every consumer either comments the convention (`shader.rs:213`: *"W stored in z component"*; `shader.rs:260`: same) or silently reads `v.z` and hopes the engine packed it right (`edgefunction.rs:137-139`, `scanline.rs:163`, `renderer.rs:110,113,119`). One wrong substitution and you've fed a z-coordinate into `1/w` interpolation. After §1.2 the `x`/`y` half of the packing is *also* going to change (from `f32` to `i32` fixed-point). You do not want to do both migrations at once — the diff will be a minefield.
+
+Land TD-3 as a pure rename (pixel-identical output before and after). Then §1.2 is a one-type change at one site.
+
+#### The new type
+
+```rust
+// src/render/rasterizer/mod.rs
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenVertex {
+    pub position: Vec2,  // screen-space pixel coordinates
+    pub w: f32,          // clip-space W (for 1/w depth + perspective-correct interpolation)
+}
+
+impl ScreenVertex {
+    #[inline]
+    pub fn new(position: Vec2, w: f32) -> Self {
+        Self { position, w }
+    }
+}
+```
+
+When §1.2 lands, `position: Vec2` swaps for `position: (i32, i32)` (or a new `IVec2`). That's one line at one site.
+
+#### Full inventory of sites that change
+
+| # | File:line | What it does today |
+|---|-----------|--------------------|
+| 1 | `render/rasterizer/mod.rs:70` | Field `points: [Vec3; 3]` |
+| 2 | `render/rasterizer/mod.rs:86-102` | `Triangle::new(points: [Vec3; 3], ...)` |
+| 3 | `engine.rs:583, 603` | `screen_vertices: [Vec3; 3]` packed via `Vec3::new(x, y, w)` |
+| 4 | `engine.rs:614-621` | `Triangle::new(screen_vertices, ...)` call site |
+| 5 | `engine.rs:678-687` | Wireframe vertex dots read `vertex.x`, `vertex.y` |
+| 6 | `render/renderer.rs:104-134` | `draw_triangle_wireframe` reads `p.x`/`p.y`/`p.z` (W) |
+| 7 | `render/rasterizer/scanline.rs:376` | `let [v0,v1,v2] = triangle.points;` — entry point |
+| 8 | `render/rasterizer/scanline.rs:126-232` (helpers) | `sort_vertices`, `rasterize_with_shader`, `fill_flat_bottom_with_shader`, `fill_flat_top_with_shader` all take `Vec3` and read `.z` as W |
+| 9 | `render/rasterizer/edgefunction.rs:229, 137-139` | Entry destructure + `1.0 / v0.z` for inv_w |
+| 10 | `render/rasterizer/edgefunction.rs:238, 246` | Passes `triangle.points: [Vec3; 3]` to shader constructors |
+| 11 | `render/rasterizer/shader.rs:214-224` | `PerspectiveCorrectTextureShader::new(points: [Vec3; 3])`, `w = [points[0].z, ...]` |
+| 12 | `render/rasterizer/shader.rs:257-276` | `PerspectiveCorrectTextureModulateShader::new(points: [Vec3; 3])`, same pattern |
+| 13 | `render/mod.rs:15` | `pub use ...Triangle...;` — add `ScreenVertex` to the re-export |
+| 14 | `lib.rs:79` | Prelude re-export — add `ScreenVertex` |
+
+Fourteen edits. Concrete before/after for each follows.
+
+#### TD-3 Step 1 — Define the type
+
+`src/render/rasterizer/mod.rs` — add after the existing `use` block, before `pub struct Triangle`:
+
+```rust
+use crate::math::vec2::Vec2;  // already imported via `crate::{... prelude::Vec2, ...}` — verify and reuse
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenVertex {
+    pub position: Vec2,
+    pub w: f32,
+}
+
+impl ScreenVertex {
+    #[inline]
+    pub fn new(position: Vec2, w: f32) -> Self {
+        Self { position, w }
+    }
+}
+```
+
+Add re-exports:
+
+```rust
+// src/render/mod.rs:15 — add ScreenVertex alongside Triangle
+pub use rasterizer::{
+    EdgeFunctionRasterizer, Rasterizer, ScanlineRasterizer, ScreenVertex, Triangle,
+    // ...
+};
+
+// src/lib.rs:79 — add to the prelude
+pub use crate::render::{
+    EdgeFunctionRasterizer, FrameBuffer, Rasterizer, ScanlineRasterizer, ScreenVertex, Triangle,
+};
+```
+
+Compile. Dead code warning on `ScreenVertex` is expected until the next step — fine, one commit.
+
+#### TD-3 Step 2 — Change `Triangle.points` field type
+
+`src/render/rasterizer/mod.rs:70`:
+
+```rust
+// before
+pub points: [Vec3; 3],
+
+// after
+pub points: [ScreenVertex; 3],
+```
+
+Also revise the doc on lines 46-51 — `.x`/`.y` pixel coords and `.z` clip-W become `.position.x`/`.position.y` and `.w`.
+
+#### TD-3 Step 3 — Update `Triangle::new`
+
+`src/render/rasterizer/mod.rs:86`:
+
+```rust
+// before
+pub fn new(
+    points: [Vec3; 3],
+    color: u32,
+    vertex_colors: [u32; 3],
+    texture_coords: [Vec2; 3],
+    shading_mode: ShadingMode,
+    texture_mode: TextureMode,
+) -> Self {
+
+// after
+pub fn new(
+    points: [ScreenVertex; 3],
+    color: u32,
+    vertex_colors: [u32; 3],
+    texture_coords: [Vec2; 3],
+    shading_mode: ShadingMode,
+    texture_mode: TextureMode,
+) -> Self {
+```
+
+Body unchanged — it already just moves `points` into the struct.
+
+At this point the compiler will flag every remaining consumer. Fix them in dependency order: engine → renderer → rasterizers → shaders.
+
+#### TD-3 Step 4 — Engine construction site
+
+`src/engine.rs:18` — add the import:
+
+```rust
+use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, ScreenVertex, Triangle};
+```
+
+`src/engine.rs:583` — default value of the accumulator:
+
+```rust
+// before
+let mut screen_vertices = [Vec3::ZERO; 3];
+
+// after
+let mut screen_vertices = [ScreenVertex::new(Vec2::ZERO, 0.0); 3];
+```
+
+(Or `= [ScreenVertex { position: Vec2::ZERO, w: 0.0 }; 3]` — same thing; use whichever style matches the file.)
+
+`src/engine.rs:603` — the packing:
+
+```rust
+// before
+screen_vertices[i] = Vec3::new(screen_x, screen_y, clip_pos.w);
+
+// after
+screen_vertices[i] = ScreenVertex::new(Vec2::new(screen_x, screen_y), clip_pos.w);
+```
+
+The `Triangle::new(screen_vertices, ...)` call at line 614 now types-checks unchanged.
+
+#### TD-3 Step 5 — Engine wireframe vertex dots
+
+`src/engine.rs:678-687`:
+
+```rust
+// before
+for vertex in &triangle.points {
+    self.renderer.draw_rect(
+        vertex.x as i32,
+        vertex.y as i32,
+        4, 4, colors::VERTEX,
+    );
+}
+
+// after
+for vertex in &triangle.points {
+    self.renderer.draw_rect(
+        vertex.position.x as i32,
+        vertex.position.y as i32,
+        4, 4, colors::VERTEX,
+    );
+}
+```
+
+#### TD-3 Step 6 — `draw_triangle_wireframe`
+
+`src/render/renderer.rs:104-134`:
+
+```rust
+// before
+pub fn draw_triangle_wireframe(&mut self, triangle: &Triangle, color: u32) {
+    let [p0, p1, p2] = triangle.points;
+    self.draw_line_bresenham(
+        p0.x as i32, p0.y as i32, p0.z,
+        p1.x as i32, p1.y as i32, p1.z,
+        color,
+    );
+    self.draw_line_bresenham(
+        p1.x as i32, p1.y as i32, p1.z,
+        p2.x as i32, p2.y as i32, p2.z,
+        color,
+    );
+    self.draw_line_bresenham(
+        p2.x as i32, p2.y as i32, p2.z,
+        p0.x as i32, p0.y as i32, p0.z,
+        color,
+    );
+}
+
+// after
+pub fn draw_triangle_wireframe(&mut self, triangle: &Triangle, color: u32) {
+    let [p0, p1, p2] = triangle.points;
+    self.draw_line_bresenham(
+        p0.position.x as i32, p0.position.y as i32, p0.w,
+        p1.position.x as i32, p1.position.y as i32, p1.w,
+        color,
+    );
+    self.draw_line_bresenham(
+        p1.position.x as i32, p1.position.y as i32, p1.w,
+        p2.position.x as i32, p2.position.y as i32, p2.w,
+        color,
+    );
+    self.draw_line_bresenham(
+        p2.position.x as i32, p2.position.y as i32, p2.w,
+        p0.position.x as i32, p0.position.y as i32, p0.w,
+        color,
+    );
+}
+```
+
+`draw_line_bresenham` itself is unchanged — it already takes `(i32, i32, f32)` per endpoint.
+
+#### TD-3 Step 7 — Scanline rasterizer
+
+This is the biggest of the set because scanline passes `Vec3` through four helper functions. Two migration strategies:
+
+**Path A — minimal churn (recommended for now):** decode at the top of `fill_triangle`, keep the `Vec3`-based internals.
+
+`src/render/rasterizer/scanline.rs:376`:
+
+```rust
+// before
+let [v0, v1, v2] = triangle.points;
+
+// after
+let [sv0, sv1, sv2] = triangle.points;
+let v0 = Vec3::new(sv0.position.x, sv0.position.y, sv0.w);
+let v1 = Vec3::new(sv1.position.x, sv1.position.y, sv1.w);
+let v2 = Vec3::new(sv2.position.x, sv2.position.y, sv2.w);
+```
+
+Internal signatures (`rasterize_with_shader`, `fill_flat_bottom_with_shader`, `fill_flat_top_with_shader`, `sort_vertices`) keep taking `Vec3` and continue reading `.z` as W. All you've done is move the `.z-is-actually-W` convention to one explicit boundary. Good enough; no behavior change.
+
+**Path B — full propagation (defer, or do when §1.6/§1.7 forces the issue):** change every `Vec3` in scanline.rs to `ScreenVertex`, rewrite `.x`/`.y` reads as `.position.x`/`.position.y`, `.z` reads as `.w`, and make `sort_vertices` sort by `v.position.y`. The `fill_flat_*_with_shader` functions already take `v0/v1/v2: Vec2` separately for barycentrics — leave those alone. Mechanical but touches every function. Pick this when you want the cleanup; Path A is fine until then.
+
+#### TD-3 Step 8 — Edge-function rasterizer
+
+Same two-path situation, but §1.2 will rewrite this module's inner loop completely, so take Path A — no point churning code you're about to replace.
+
+`src/render/rasterizer/edgefunction.rs:229`:
+
+```rust
+// before
+let [v0, v1, v2] = triangle.points;
+
+// after
+let [sv0, sv1, sv2] = triangle.points;
+let v0 = Vec3::new(sv0.position.x, sv0.position.y, sv0.w);
+let v1 = Vec3::new(sv1.position.x, sv1.position.y, sv1.w);
+let v2 = Vec3::new(sv2.position.x, sv2.position.y, sv2.w);
+```
+
+Lines 238 and 246 still pass a `[Vec3; 3]` into the perspective-correct shader constructors — but those constructors are changing in TD-3 Step 9 below, so update the calls as part of that step.
+
+#### TD-3 Step 9 — Perspective-correct shader constructors
+
+`src/render/rasterizer/shader.rs:214-224` (`PerspectiveCorrectTextureShader::new`):
+
+```rust
+// before
+pub fn new(texture: &'a Texture, uvs: [Vec2; 3], points: [Vec3; 3]) -> Self {
+    // Extract W from the z component (stored by engine.rs during projection)
+    let w = [points[0].z, points[1].z, points[2].z];
+
+    Self {
+        texture,
+        u_over_w: [uvs[0].x / w[0], uvs[1].x / w[1], uvs[2].x / w[2]],
+        v_over_w: [uvs[0].y / w[0], uvs[1].y / w[1], uvs[2].y / w[2]],
+        inv_w: [1.0 / w[0], 1.0 / w[1], 1.0 / w[2]],
+    }
+}
+
+// after
+pub fn new(texture: &'a Texture, uvs: [Vec2; 3], points: [ScreenVertex; 3]) -> Self {
+    let w = [points[0].w, points[1].w, points[2].w];
+
+    Self {
+        texture,
+        u_over_w: [uvs[0].x / w[0], uvs[1].x / w[1], uvs[2].x / w[2]],
+        v_over_w: [uvs[0].y / w[0], uvs[1].y / w[1], uvs[2].y / w[2]],
+        inv_w: [1.0 / w[0], 1.0 / w[1], 1.0 / w[2]],
+    }
+}
+```
+
+Also drop the `// W stored in z component` comment — the type now says it.
+
+Import at top of `shader.rs`:
+
+```rust
+use crate::render::rasterizer::ScreenVertex;  // or `use super::ScreenVertex;`
+```
+
+`src/render/rasterizer/shader.rs:257-276` (`PerspectiveCorrectTextureModulateShader::new`): identical pattern — swap `[Vec3; 3]` → `[ScreenVertex; 3]`, `.z` → `.w`, delete the comment.
+
+Back in `src/render/rasterizer/edgefunction.rs:238, 246` — the calls now work again because `triangle.points` is `[ScreenVertex; 3]` and the constructors now accept that:
+
+```rust
+// unchanged-looking, but now type-correct
+let shader = PerspectiveCorrectTextureShader::new(
+    tex,
+    triangle.texture_coords,
+    triangle.points,  // [ScreenVertex; 3] ✓
+);
+```
+
+#### Verification for TD-3
+
+- **`cargo check` clean** after each sub-step, not just at the end. Each step should compile on its own; the compiler is your migration scaffolding here.
+- **Pixel-identical rendering.** TD-3 is a pure rename — nothing computes a different number. Capture a screenshot of the current demo scene *before* TD-3, capture another *after* all 9 sub-steps, diff them. Zero pixel differences.
+- **All 5 render modes.** Keys 1–5 exercise `draw_triangle_wireframe`, `draw_rect` on vertex dots, and the filled paths (scanline or edge-function). Check each.
+- **Textured path in particular.** The perspective-correct shaders (`shader.rs:197-245`, `:248-315`) are where `.z → .w` most easily goes wrong; a miss would show a textured mesh suddenly going solid-colored or flipping UVs.
+- **`cargo test` passes** — the existing suite will catch anything integration-visible.
+
+Commit TD-3 as its own landing. Then proceed to §1.2 below.
+
+### Step 1 — Lock in a failing test first
+
+Write a regression test before you touch anything. It's short and it's the only thing that makes "watertight" objective.
+
+- Construct two triangles that share an edge, with vertex positions deliberately placed at non-integer coordinates (e.g., `(10.3, 20.7)`, `(50.9, 20.7)`, `(30.1, 60.2)` and its reflected partner).
+- Rasterize both into a clean buffer.
+- Walk the buffer: count pixels written, and separately count pixels *written twice* by instrumenting the shader (or by using a counter buffer).
+- Assert: total writes == union coverage, double-writes == 0.
+
+Today this test fails (some double-writes, possibly some crack pixels depending on vertex placement). After 1.2 it passes. Keep it as the guard.
+
+### Step 2 — Snap vertex (x, y) to fixed-point on entry
+
+```rust
+const SUBPIXEL_BITS: i32 = 4;
+const SUBPIXEL_STEP: i32 = 1 << SUBPIXEL_BITS; // 16
+
+let x0 = (v0.x * SUBPIXEL_STEP as f32).round() as i32;
+let y0 = (v0.y * SUBPIXEL_STEP as f32).round() as i32;
+// ... x1/y1, x2/y2
+```
+
+`v0.z` (clip-space W) stays `f32` — it's used for depth (`1/w`) and perspective-correct attribute interpolation, not for coverage tests. Same for the original `v0.x`, `v0.y` — keep them around for barycentric-weighted attribute math if you want, or just use the fixed-point derivation below.
+
+4 bits is a good default. Bump to 8 (`SUBPIXEL_STEP = 256`) only if you see snapping artifacts on thin, nearly-horizontal triangles at low resolutions. Overflow budget at 8 bits + 8K resolution: coordinates ~21 bits, products ~42 bits, differences ~43 bits — `i64` has 63 usable bits, no concern.
+
+### Step 3 — Evaluate the edge function in i64
+
+Pixel centers also become fixed-point. A pixel `(x, y)` has its center at `(x * 16 + 8, y * 16 + 8)` with 4 subpixel bits.
+
+```rust
+#[inline]
+fn edge_i64(ax: i32, ay: i32, bx: i32, by: i32, px: i32, py: i32) -> i64 {
+    (bx - ax) as i64 * (py - ay) as i64 - (by - ay) as i64 * (px - ax) as i64
+}
+```
+
+The arithmetic is exact. Two triangles sharing the edge AB now produce identical `edge_i64(ax, ay, bx, by, px, py)` values at every pixel — the non-determinism failure mode is physically gone, not merely unlikely.
+
+### Step 4 — Compute signed area and winding in i64
+
+```rust
+let area2 = edge_i64(x0, y0, x1, y1, x2, y2);
+if area2 == 0 { return; } // degenerate — no f32::EPSILON fudge needed
+let ccw = area2 > 0;
+```
+
+Today's rasterizer supports both windings (clipping can emit either) — keep that. The integer version is strictly more reliable: the degenerate test becomes an exact `== 0`, not `abs() < EPSILON`.
+
+### Step 5 — Classify each edge as top-left or not
+
+This is the rule that makes shared edges owned by exactly one triangle. The three edges whose edge functions are `w0`, `w1`, `w2` are `v1→v2`, `v2→v0`, `v0→v1` (each opposite the same-indexed vertex — that's what makes `wᵢ` proportional to barycentric `λᵢ`).
+
+For a CCW triangle in `+y`-down screen space (which is what this codebase uses — see `CLAUDE.md`):
+
+```rust
+fn is_top_left_ccw(ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    let dx = bx - ax;
+    let dy = by - ay;
+    (dy == 0 && dx > 0) // top: horizontal, runs left-to-right
+        || dy > 0       // left: runs downward on screen (y increases)
+}
+```
+
+For CW, flip both (`dx < 0`, `dy < 0`). A sign-aware single function that handles both:
+
+```rust
+fn is_top_left(ax: i32, ay: i32, bx: i32, by: i32, ccw: bool) -> bool {
+    let dx = bx - ax;
+    let dy = by - ay;
+    if ccw { (dy == 0 && dx > 0) || dy > 0 }
+    else   { (dy == 0 && dx < 0) || dy < 0 }
+}
+```
+
+**Subtlety — `+y` direction.** Most top-left-rule writeups online were written for `+y`-up (OpenGL / D3D NDC). This codebase renders into a `+y`-down framebuffer (see `engine.rs:600`: `screen_y = (1.0 - ndc_y) * 0.5 * h`). The *formula* for detecting "top" and "left" inverts when y inverts — "down the screen" means `dy > 0` here, not `dy < 0`. If you copy from a +y-up reference, flip signs on the `dy` comparisons. Giesen's *Triangle rasterization in practice* is already written for +y-down and is the right reference to start from.
+
+### Step 6 — Apply the bias in the inside test
+
+Compute one bias per edge, once at the top of the function:
+
+```rust
+let bias0 = if is_top_left(x1, y1, x2, y2, ccw) { 0 } else { -1 };
+let bias1 = if is_top_left(x2, y2, x0, y0, ccw) { 0 } else { -1 };
+let bias2 = if is_top_left(x0, y0, x1, y1, ccw) { 0 } else { -1 };
+```
+
+Per-pixel, inside the bounding-box loop:
+
+```rust
+let px = (x << SUBPIXEL_BITS) + (SUBPIXEL_STEP / 2);
+let py = (y << SUBPIXEL_BITS) + (SUBPIXEL_STEP / 2);
+
+let w0 = edge_i64(x1, y1, x2, y2, px, py) + bias0;
+let w1 = edge_i64(x2, y2, x0, y0, px, py) + bias1;
+let w2 = edge_i64(x0, y0, x1, y1, px, py) + bias2;
+
+let inside = if ccw { w0 >= 0 && w1 >= 0 && w2 >= 0 }
+             else   { w0 <= 0 && w1 <= 0 && w2 <= 0 };
+```
+
+The `-1` bias is the smallest possible nudge in subpixel² units. It affects *only* previously-tied pixels (`wᵢ == 0`) — exactly the shared-edge case — and pushes them out of the triangle for whichever triangle *doesn't* own the edge. The other triangle, for which this same edge is top-left (bias 0), still includes them. Ownership is decided unambiguously.
+
+### Step 7 — Barycentrics and depth from integer w
+
+Barycentric coordinates are `wᵢ / area2`, same as before but with integer inputs:
+
+```rust
+let inv_area = 1.0 / area2 as f32;
+let lambda = [
+    w0 as f32 * inv_area,
+    w1 as f32 * inv_area,
+    w2 as f32 * inv_area,
+];
+
+let depth = lambda[0] * inv_w0 + lambda[1] * inv_w1 + lambda[2] * inv_w2;
+let color = shader.shade(lambda);
+buffer.set_pixel_with_depth(x, y, depth, color);
+```
+
+The bias of `-1` introduces a barycentric error of order `1 / area2` at the boundary. For any triangle bigger than a few pixels that's well below `1/256` — invisible in interpolated color, depth, and UVs. Interior pixels see no bias at all.
+
+### Step 8 — Bounding box stays f32 (but could be integer)
+
+The outer bounding-box floor/ceil at lines 143-146 can stay as-is — the box just needs to cover the triangle. Converting it to integer (`min(x0, x1, x2) >> SUBPIXEL_BITS` etc.) is a minor cleanup, not a correctness fix.
+
+### Optimization — incremental edge evaluation (defer)
+
+`edge_i64` at adjacent pixels differs by fixed steps: moving `+1` in `px` adds `-(by - ay)`; moving `+1` in `py` adds `(bx - ax)`. Precompute the three steps per triangle, then in the inner loop add the step instead of recomputing the full multiply-subtract. Fabian Giesen's *Optimizing the basic rasterizer* walks through this. Measure first — for typical triangle sizes the naive version is already fast enough that it may not be worth the code-weight.
+
+### §1.2 revisits `ScreenVertex` once more
+
+With the pre-step done, `ScreenVertex.position` is `Vec2`. §1.2 changes it once more — to `(i32, i32)` (or a new `IVec2`) carrying the sub-pixel-snapped fixed-point coordinates. That single field-type edit is the entire §1.2 TD-3 intersection. The conversion from clip-space-derived `f32` to fixed-point `i32` lives in one place — either `ScreenVertex::from_float(Vec2, f32)` constructor, or inline at `engine.rs:603` — and the rasterizer stops decoding anything.
+
+### Verification
+
+- **Shared-edge regression test (Step 1)** — total pixels written across both triangles equals union coverage exactly. No double-writes.
+- **Gap test** — two triangles sharing an edge where the *shared vertices* are at non-integer positions (e.g., both use `(30.1, 60.2)`). Pre-fix: occasional missing pixels along the shared edge. Post-fix: zero missing pixels.
+- **Winding fuzz** — swap v1 and v2 (flipping winding) on each of the two triangles. Coverage should be identical. Confirms the CW/CCW branches of the top-left rule agree at the shared edge.
+- **Golden image (if §3.3 lands)** — render a tessellated grid of triangles. Pre-fix: scattered single-pixel shimmer on shared edges, visible against a flat color. Post-fix: clean.
+- **Visual overdraw heatmap (if §3.1 lands)** — boundary pixels should all show overdraw count = 1. Pre-fix, shared edges light up at count 2.
+- **Benchmark** — a grid of 1000 triangles covering the screen. Expect roughly neutral performance; `i64` edge math is simple and a potential speedup from skipping double-writes balances the fixed-point conversion cost.
+
+### Order of implementation (suggested)
+
+1. **Pre-step (TD-3)** — `ScreenVertex` type, 9 sub-steps above. Pixel-identical output before and after; commit on its own.
+2. Step 1 — shared-edge regression test. Red.
+3. Step 2 — fixed-point vertex snap on entry to `rasterize_with_shader` (now flows cleanly from `ScreenVertex.position`).
+4. Steps 3–4 — `edge_i64`, integer area, integer winding.
+5. Steps 5–6 — top-left classification and biased inside test. Regression test from Step 1 turns green here.
+6. Step 7 — barycentrics via `i64 → f32` division. Visual parity check vs. pre-fix rendering.
+7. Step 8 — (optional) integerize bounding box.
+8. Optimization — incremental edge stepping, benched.
+
+### References for this appendix
+
+- **Fabian Giesen — *Triangle rasterization in practice*** — <https://fgiesen.wordpress.com/2013/02/08/triangle-rasterization-in-practice/> — the definitive walkthrough of fixed-point rasterization and the top-left rule, written for `+y`-down. Start here.
+- **Fabian Giesen — *Optimizing the basic rasterizer*** — <https://fgiesen.wordpress.com/2013/02/10/optimizing-the-basic-rasterizer/> — incremental edge evaluation.
+- **Juan Pineda — *A Parallel Algorithm for Polygon Rasterization*** (SIGGRAPH 1988) — the original edge-function paper.
+- **Microsoft — *Rasterization Rules*** — <https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-rasterizer-stage-rules> — the canonical top-left rule specification. Worth reading once for the authoritative statement.
+- **Chris Hecker — *Perspective Texture Mapping* series** — <http://chrishecker.com/Miscellaneous_Technical_Articles> — CPU-era rasterization including sub-pixel correction.

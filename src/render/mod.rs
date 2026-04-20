@@ -12,6 +12,6 @@ pub mod renderer;
 pub use framebuffer::FrameBuffer;
 pub use rasterizer::{
     EdgeFunctionRasterizer, Rasterizer, RasterizerDispatcher, RasterizerType, ScanlineRasterizer,
-    Triangle,
+    ScreenVertex, Triangle,
 };
 pub use renderer::Renderer;

@@ -8,19 +8,33 @@ use std::collections::HashMap;
 
 use crate::camera::FpsCamera;
 use crate::clipper::{ClipSpaceClipper, ClipSpacePolygon, ClipSpaceVertex};
-use crate::frustum::{Frustum, FrustumTest};
 use crate::colors;
+use crate::frustum::{Frustum, FrustumTest};
 use crate::light::DirectionalLight;
 use crate::mesh::{LoadError, Texel, Vertex};
 use crate::model::Model;
-use crate::prelude::{Mat4, Vec3, Vec4};
+use crate::prelude::{Mat4, Vec2, Vec3, Vec4};
 use crate::projection::Projection;
-use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, Triangle};
+use crate::render::{Rasterizer, RasterizerDispatcher, Renderer, ScreenVertex, Triangle};
 
 pub use crate::render::RasterizerType;
 use crate::texture::Texture;
 
-/// Rendering mode presets
+/// What primitives get drawn for each triangle.
+///
+/// This controls *drawing style* only — it is independent of `ShadingMode`
+/// and `TextureMode`, which control how filled pixels are colored.
+///
+/// | Variant | Wireframe lines | Filled interior | Vertex dots |
+/// |---------|-----------------|-----------------|-------------|
+/// | `Wireframe` | yes | no | no |
+/// | `WireframeVertices` | yes | no | yes |
+/// | `FilledWireframe` | yes | yes | no |
+/// | `FilledWireframeVertices` | yes | yes | yes |
+/// | `Filled` | no | yes | no |
+///
+/// When only wireframe lines are drawn, `ShadingMode` and `TextureMode` are
+/// irrelevant — line drawing always uses `Triangle::color`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderMode {
     /// Wireframe only (key: 1)
@@ -36,27 +50,68 @@ pub enum RenderMode {
     Filled,
 }
 
-/// Shading mode for lighting calculations
+/// How per-vertex lighting is computed and stored into `Triangle::vertex_colors`.
+///
+/// `ShadingMode` controls the *lighting* step only — what color each vertex
+/// ends up with after the directional light is applied. How that lit color
+/// reaches the final pixel depends on `TextureMode`:
+///
+/// - With `TextureMode::None`, the lit `vertex_colors` are used directly
+///   (interpolated across the triangle for `Gouraud`; uniform for `Flat`).
+/// - With `TextureMode::Modulate`, the lit `vertex_colors` tint the texture
+///   sample (texel × light).
+/// - With `TextureMode::Replace`, the lit `vertex_colors` are ignored — the
+///   texture sample is used verbatim, so `ShadingMode` has no visible effect.
+///
+/// Lighting is precomputed once per frame in `Engine::update` and baked into
+/// `Triangle::vertex_colors`; the rasterizer never re-evaluates the light.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShadingMode {
-    /// No lighting - use base color only
+    /// No lighting applied. All three entries of `vertex_colors` are set to
+    /// `Triangle::color` so downstream code can treat `vertex_colors`
+    /// uniformly regardless of shading mode.
     None,
-    /// Flat shading - one color per face based on face normal
+    /// One lit color per face, computed from the face normal. All three
+    /// entries of `vertex_colors` are identical, so there is no visible
+    /// gradient across the triangle.
     #[default]
     Flat,
-    /// Gouraud shading - per-vertex lighting interpolated across face
+    /// Lighting is computed at each vertex from the vertex normal and
+    /// interpolated across the triangle via barycentric coordinates,
+    /// producing a smooth gradient.
     Gouraud,
 }
 
-/// Texture mapping mode
+/// How a texture sample (if any) combines with the lit vertex color.
+///
+/// `TextureMode` is orthogonal to `ShadingMode`:
+/// - `ShadingMode` decides *what* `vertex_colors` contains (the lit color).
+/// - `TextureMode` decides *how* that lit color is used at each pixel.
+///
+/// Combination reference (for filled pixels only):
+///
+/// | `TextureMode` | Pixel color | `ShadingMode` influence |
+/// |---------------|-------------|--------------------------|
+/// | `None` | interpolated `vertex_colors` | full — this *is* the lit color |
+/// | `Replace` | texture sample (texel) | none — lighting is ignored |
+/// | `Modulate` | texel × interpolated `vertex_colors` | full — lighting tints the texel |
+///
+/// Naming note: `Replace` and `Modulate` mirror the classic fixed-function
+/// OpenGL `glTexEnv` terminology. Think of them as "texture only" (unlit)
+/// and "texture × light" (lit) respectively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextureMode {
-    /// No texture - use shading color only
+    /// No texture sampled; the lit `vertex_colors` (or `color` when
+    /// `ShadingMode::None`) are used directly.
     #[default]
     None,
-    /// Texture replaces color entirely
+    /// Texture sample replaces the color entirely. Lighting from
+    /// `ShadingMode` is discarded — use this for unlit surfaces like
+    /// skyboxes, UI, or textures that already have lighting baked in.
     Replace,
-    /// Texture color modulated by lighting intensity
+    /// Texture sample is multiplied component-wise by the lit
+    /// `vertex_colors`. This is the standard "textured and lit" path:
+    /// the texture provides surface detail, lighting provides shading.
     Modulate,
 }
 
@@ -310,16 +365,15 @@ impl Engine {
             let model_scale_max = m_scl.x.abs().max(m_scl.y.abs()).max(m_scl.z.abs());
             let model_world_radius = model_bounds.radius * model_scale_max;
 
-            let skip_mesh_cull = match frustum
-                .classify_sphere(model_world_center, model_world_radius)
-            {
-                FrustumTest::Outside => {
-                    triangles_per_model.push(model_triangles);
-                    continue;
-                }
-                FrustumTest::FullyInside => true,
-                FrustumTest::Intersecting => false,
-            };
+            let skip_mesh_cull =
+                match frustum.classify_sphere(model_world_center, model_world_radius) {
+                    FrustumTest::Outside => {
+                        triangles_per_model.push(model_triangles);
+                        continue;
+                    }
+                    FrustumTest::FullyInside => true,
+                    FrustumTest::Intersecting => false,
+                };
 
             // Iterate over all meshes in this model
             for mesh in model.meshes() {
@@ -353,8 +407,7 @@ impl Engine {
                     // --- Layer 2: AABB n/p-vertex test for a tighter answer ---
                     // Transform the 8 local-space AABB corners into world space,
                     // then take their enclosing axis-aligned box.
-                    let mut world_min =
-                        Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+                    let mut world_min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                     let mut world_max =
                         Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
                     for c in mesh.aabb().corners() {
@@ -413,12 +466,19 @@ impl Engine {
                         world_matrix * face_vertices[2].position,
                     ];
 
-                    // Calculate face normal (needed for backface culling)
+                    // Calculate face normal (needed for backface culling).
+                    // Note: this is a left-handed coordinate system, so under
+                    // the left-hand rule (B-A) × (C-A) points toward the
+                    // camera exactly when the triangle is wound CW from the
+                    // viewer's side. CW is therefore "front-facing" here.
                     let vec_ab = world_space_positions[1] - world_space_positions[0];
                     let vec_ac = world_space_positions[2] - world_space_positions[0];
                     let face_normal = vec_ab.cross(vec_ac);
 
-                    // Apply backface culling
+                    // Backface cull: if the face normal points away from the
+                    // camera (dot with the camera-ward ray is negative), the
+                    // triangle is facing away and we skip it. Flip this sign
+                    // if the scene's meshes are CCW-wound.
                     if backface_culling {
                         let camera_ray = camera_position - world_space_positions[0];
                         if face_normal.dot(camera_ray) < 0.0 {
@@ -518,7 +578,7 @@ impl Engine {
                         let clipped_texcoords = [v0.texcoord, v1.texcoord, v2.texcoord];
                         let clipped_colors = [v0.color, v1.color, v2.color];
 
-                        let mut screen_vertices = [Vec3::ZERO; 3];
+                        let mut screen_vertices = [ScreenVertex::new(Vec2::ZERO, 0.0); 3];
                         let mut all_valid = true;
 
                         for (i, clip_pos) in clipped_positions.iter().enumerate() {
@@ -538,7 +598,8 @@ impl Engine {
                             let screen_y = (1.0 - ndc_y) * 0.5 * buffer_height as f32;
 
                             // Store w for depth buffer (1/w) and perspective-correct interpolation
-                            screen_vertices[i] = Vec3::new(screen_x, screen_y, clip_pos.w);
+                            screen_vertices[i] =
+                                ScreenVertex::new(Vec2::new(screen_x, screen_y), clip_pos.w);
                         }
 
                         if all_valid {
@@ -616,8 +677,8 @@ impl Engine {
                 if draw_vertices {
                     for vertex in &triangle.points {
                         self.renderer.draw_rect(
-                            vertex.x as i32,
-                            vertex.y as i32,
+                            vertex.position.x as i32,
+                            vertex.position.y as i32,
                             4,
                             4,
                             colors::VERTEX,

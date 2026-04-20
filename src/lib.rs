@@ -76,6 +76,6 @@ pub mod prelude {
 /// Module exposing internals for benchmarking. Not part of the stable API.
 pub mod bench {
     pub use crate::render::{
-        EdgeFunctionRasterizer, FrameBuffer, Rasterizer, ScanlineRasterizer, Triangle,
+        EdgeFunctionRasterizer, FrameBuffer, Rasterizer, ScanlineRasterizer, ScreenVertex, Triangle,
     };
 }

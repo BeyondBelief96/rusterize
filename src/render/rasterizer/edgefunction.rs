@@ -47,9 +47,9 @@
 //! - Scratchapixel: <https://www.scratchapixel.com/lessons/3d-basic-rendering/rasterization-practical-implementation>
 
 use super::shader::{FlatShader, GouraudShader, PixelShader};
-use super::{Rasterizer, Triangle};
+use super::{Rasterizer, ScreenVertex, Triangle};
 use crate::engine::TextureMode;
-use crate::math::vec3::Vec3;
+use crate::math::vec2::Vec2;
 use crate::render::framebuffer::FrameBuffer;
 use crate::render::rasterizer::shader::{
     PerspectiveCorrectTextureModulateShader, PerspectiveCorrectTextureShader,
@@ -105,7 +105,7 @@ impl EdgeFunctionRasterizer {
     /// * `b` - End point of the edge
     /// * `p` - Point to test against the edge
     #[inline]
-    fn edge_function(a: Vec3, b: Vec3, p: Vec3) -> f32 {
+    fn edge_function(a: Vec2, b: Vec2, p: Vec2) -> f32 {
         (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
     }
 
@@ -122,28 +122,35 @@ impl EdgeFunctionRasterizer {
     /// the final color. Depth testing uses interpolated 1/w values.
     ///
     /// # Arguments
-    /// * `v0, v1, v2` - Triangle vertices where x,y are screen coords and z stores clip-space W
+    /// * `v0, v1, v2` - Triangle vertices in screen space, with clip-space W in `.w`
     /// * `buffer` - Framebuffer with color and depth buffers
     /// * `shader` - Pixel shader for color computation
     fn rasterize_with_shader<S: PixelShader>(
-        v0: Vec3,
-        v1: Vec3,
-        v2: Vec3,
+        v0: ScreenVertex,
+        v1: ScreenVertex,
+        v2: ScreenVertex,
         buffer: &mut FrameBuffer,
         shader: &S,
     ) {
-        // Precompute 1/w for each vertex (z component stores clip-space W)
-        // These can be linearly interpolated in screen space (1/ z)
-        let inv_w0 = 1.0 / v0.z;
-        let inv_w1 = 1.0 / v1.z;
-        let inv_w2 = 1.0 / v2.z;
+        // Precompute 1/w — linear in screen space, so it can be
+        // barycentrically interpolated for depth testing.
+        let inv_w0 = 1.0 / v0.w;
+        let inv_w1 = 1.0 / v1.w;
+        let inv_w2 = 1.0 / v2.w;
+
+        // 2D positions for coverage math — edge functions and the
+        // bounding box only need pixel-space (x, y).
+        let p0 = v0.position;
+        let p1 = v1.position;
+        let p2 = v2.position;
+
         // ─────────────────────────────────────────────────────────────────────
         // Step 1: Compute bounding box
         // ─────────────────────────────────────────────────────────────────────
-        let min_x = v0.x.min(v1.x).min(v2.x).floor() as i32;
-        let max_x = v0.x.max(v1.x).max(v2.x).ceil() as i32;
-        let min_y = v0.y.min(v1.y).min(v2.y).floor() as i32;
-        let max_y = v0.y.max(v1.y).max(v2.y).ceil() as i32;
+        let min_x = p0.x.min(p1.x).min(p2.x).floor() as i32;
+        let max_x = p0.x.max(p1.x).max(p2.x).ceil() as i32;
+        let min_y = p0.y.min(p1.y).min(p2.y).floor() as i32;
+        let max_y = p0.y.max(p1.y).max(p2.y).ceil() as i32;
 
         // Clip to framebuffer bounds
         let min_x = min_x.max(0);
@@ -154,7 +161,7 @@ impl EdgeFunctionRasterizer {
         // ─────────────────────────────────────────────────────────────────────
         // Step 2: Compute signed area (2x triangle area)
         // ─────────────────────────────────────────────────────────────────────
-        let area = Self::edge_function(v0, v1, v2);
+        let area = Self::edge_function(p0, p1, p2);
         if area.abs() < f32::EPSILON {
             return; // Degenerate triangle
         }
@@ -166,12 +173,12 @@ impl EdgeFunctionRasterizer {
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 // Sample at pixel center
-                let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
+                let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
 
                 // Compute edge functions
-                let w0 = Self::edge_function(v1, v2, p);
-                let w1 = Self::edge_function(v2, v0, p);
-                let w2 = Self::edge_function(v0, v1, p);
+                let w0 = Self::edge_function(p1, p2, p);
+                let w1 = Self::edge_function(p2, p0, p);
+                let w2 = Self::edge_function(p0, p1, p);
 
                 // Inside test (handles both CW and CCW winding)
                 let inside = if area > 0.0 {
